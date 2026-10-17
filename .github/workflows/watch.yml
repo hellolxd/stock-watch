@@ -2,29 +2,29 @@ name: cloud-watch
 
 on:
   schedule:
-      - cron: '*/30 1-7 * * 1-5'
-        workflow_dispatch: {}
+    - cron: '*/30 1-7 * * 1-5'
+  workflow_dispatch: {}
 
-        permissions:
-          contents: write
+permissions:
+  contents: write
 
-          jobs:
-            watch:
-                runs-on: ubuntu-latest
-                    steps:
-                          - uses: actions/checkout@v4
-                                - uses: actions/setup-python@v5
-                                        with:
-                                                  python-version: '3.12'
-                                                        - name: 运行云端监测
-                                                                env:
-                                                                          SMTP_USER: ${{ secrets.SMTP_USER }}
-                                                                                    SMTP_PASS: ${{ secrets.SMTP_PASS }}
-                                                                                              MAIL_TO: ${{ secrets.MAIL_TO }}
-                                                                                                      run: python cloud_watch.py --config watchlist.json --state _state.json
-                                                                                                            - name: 回写去重状态
-                                                                                                                    run: |
-                                                                                                                              git config user.name "github-actions[bot]"
-                                                                                                                                        git config user.email "github-actions[bot]@users.noreply.github.com"
-                                                                                                                                                  git add _state.json
-                                                                                                                                                            git diff --cached --quiet || (git commit -m "update watch state" && git push)
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 运行云端监测
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python cloud_watch.py --config watchlist.json --state _state.json
+      - name: 回写去重状态
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add _state.json
+          git diff --cached --quiet || (git commit -m "update watch state" && git push)
