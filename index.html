@@ -319,7 +319,8 @@ function pf(v){ if(v==null||isNaN(v))return '-'; return (v>0?'+':'')+Number(v).t
 function money(v){ if(v==null||isNaN(v)||v<=0)return '-'; const y=v/1e8; return y>=1? y.toFixed(2)+'亿' : Math.round(v/1e4)+'万'; }
 function numFmt(v){ if(v==null||isNaN(v))return '-'; return v>=1e8?(v/1e8).toFixed(2)+'亿':v>=1e4?(v/1e4).toFixed(0)+'万':String(v); }
 
-/* ============ 行情数据层（JSONP） ============ */
+/* ============ 行情数据层 v3：腾讯 qt.gtimg.cn 主源 + 东财 JSONP 备源 ============ */
+const QUOTE_SRC = localStorage.getItem('tk_quote_src') || 'tencent'; // 'tencent' | 'eastmoney'
 function jsonp(url){
   return new Promise((res,rej)=>{
     const cb='__tk'+Math.floor(Math.random()*1e6);
@@ -331,26 +332,65 @@ function jsonp(url){
     setTimeout(()=>{ if(window[cb]){ delete window[cb]; s.remove(); rej(new Error('timeout')); } }, 12000);
   });
 }
+/* 腾讯批量：v_sh600519="1~名称~代码~现价~昨收~...~涨跌%~量比~...~换手%~...~成交额(万)"
+   实测字段：f1名称 f2代码 f3现价 f4昨收 f31量比 f32涨跌% f37成交额(万) f38换手% */
+async function fetchQuotesTencent(codes){
+  if(!codes.length) return {};
+  const map={};
+  const B=60;
+  for(let i=0;i<codes.length;i+=B){
+    const part=codes.slice(i,i+B);
+    const q=part.map(c=>(c[0]==='6'||c[0]==='5'?'sh':(c[0]==='0'||c[0]==='3'?'sz':'sh'))+c).join(',');
+    try{
+      const r=await fetch('https://qt.gtimg.cn/q='+q,{cache:'no-store'});
+      const t=new TextDecoder('gbk').decode(await r.arrayBuffer());
+      t.split(';').forEach(function(seg){
+        if(!seg||seg.indexOf('=')<0) return;
+        const mm=seg.match(/v_\w{2}(\d{6})="([^"]*)"/); if(!mm) return;
+        const f=(mm[2]||'').split('~'); const code=mm[1];
+        const price=parseFloat(f[3]), prev=parseFloat(f[4]);
+        if(!(price>0)) return;
+        map[code]={ f12:code, f14:f[1], f2:price, f3:prev>0?Math.round((price-prev)/prev*10000)/100:0,
+                    f10:parseFloat(f[31])||0, f8:parseFloat(f[38])||0,
+                    f6:(parseFloat(f[37])||0)*1e4 };
+      });
+    }catch(e){}
+    if(i+B<codes.length) await new Promise(r=>setTimeout(r,120));
+  }
+  return map;
+}
 const QUOTE_FIELDS='f2,f3,f4,f5,f6,f7,f8,f10,f12,f14,f15,f16,f17,f18,f20,f23';
 async function fetchQuotes(codes){
   if(!codes.length) return {};
+  if(QUOTE_SRC==='eastmoney') return fetchQuotesEM(codes);
+  // 腾讯主源，失败自动切东财
+  let m = await fetchQuotesTencent(codes);
+  if(!Object.keys(m).length){ m = await fetchQuotesEM(codes); }
+  return m;
+}
+async function fetchQuotesEM(codes){
   const map={};
-  const B=45; // 分批拉取，避免单次请求股票过多被限流
+  const B=45;
   for(let i=0;i<codes.length;i+=B){
     const part=codes.slice(i,i+B);
     const secids=part.map(secidOf).join(',');
     try{
       const d=await jsonp('https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids='+secids+'&fields='+QUOTE_FIELDS);
       const diff=d&&d.data&&d.data.diff;
-      if(Array.isArray(diff)) diff.forEach(it=>{ if(it&&it.f12!=null) map[String(it.f12)]=it; });
+      if(Array.isArray(diff)) diff.forEach(it=>{ if(it&&it.f12!=null) map[String(it.f12)]=toTencentShape(it); });
     }catch(e){}
-    if(i+B<codes.length) await new Promise(r=>setTimeout(r,150));
   }
   return map;
 }
-/* ---- 全市场（沪深京 A 股）分页列表 ---- */
+function toTencentShape(it){
+  // 东财字段→腾讯同形，保证下游统一
+  const out={f12:String(it.f12), f14:it.f14, f2:it.f2, f3:it.f3, f10:it.f10, f8:it.f8, f6:it.f6};
+  return out;
+}
+/* ---- 全市场榜单（东财 clist；已配合 DROP_BOARD 只取前 14 页防限流） ---- */
 const MARKET_FS='m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048';
 async function fetchMarketPage(pn){
+  // 腾讯版：qt.gtimg.cn 无分页榜单能力，这里用“候选池全量 + 东财字段兼容”拉页面：改为东财源但仅在前 14 页内使用
   return jsonp('https://push2.eastmoney.com/api/qt/clist/get?pn='+pn+'&pz=100&po=1&np=1&fltt=2&invt=2&fid=f6&fs='+MARKET_FS+'&fields='+QUOTE_FIELDS);
 }
 /* 全市场精选（约1000只）：剔除科创板(688/689)、北交所(43/83/87/92)、零成交个股；保留成交额前 1000 */
@@ -379,16 +419,57 @@ async function fetchAllMarket(onProgress){
   }
   return {map,total,failedPages};
 }
+/* K线 v3：主源 proxy.finance.qq.com（腾讯系，含 qt+mkline），备源新浪，末备东财 */
 async function fetchKline(code,lmt){
   lmt=lmt||60;
-  // 免费接口偶发空响应/限流，最多重试 3 次
+  const sym=(code[0]==='6'||code[0]==='5')?('sh'+code):('sz'+code);
   for(let att=0; att<3; att++){
+    // 1) 腾讯 mkline 分钟线（m60，600根≈约60个交易日；日聚合出日K）
     try{
-      const d=await jsonp('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secidOf(code)+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58&klt=101&fqt=1&end=20500101&lmt='+lmt);
-      const kls=d&&d.data&&d.data.klines;
-      if(Array.isArray(kls)&&kls.length) return kls.map(k=>{ const p=k.split(','); return {date:p[0],o:+p[2],c:+p[3],h:+p[4],l:+p[5],v:+p[6],a:+p[7]}; });
+      const r=await fetch('https://proxy.finance.qq.com/ifzqgtimg/appstock/app/kline/mkline?param='+sym+',m60,,600',{cache:'no-store'});
+      if(r.ok){
+        const j=await r.json();
+        const node=j&&j.data&&j.data[sym]||{};
+        const qt=node.qt;
+        const mk=node.m60||[];
+        // 每行 m60: [ 'YYYY-MM-DD HH:MM', open, close, high, low, volume ]
+        if(Array.isArray(mk)&&mk.length>=10){
+          // 按“日”聚合 m60：同日期取分组首开/最高/最低/末收
+          const byDate={}; const order=[];
+          mk.forEach(function(row){
+            const d=row[0].slice(0,10);
+            if(!(d in byDate)){ const b={date:d,o:+row[1],h:+row[2],l:+row[3],c:+row[4],v:+row[5]}; byDate[d]=b; order.push(d); }
+            else{ const b=byDate[d]; b.h=Math.max(b.h,+row[2]); b.l=Math.min(b.l,+row[3]); b.c=+row[4]; b.v+=+row[5]; }
+          });
+          const days=order.map(function(d){ return byDate[d]; });
+          if(days.length){
+            // 最新价对齐：qt[3]=现价
+            if(qt&&qt[3]>0){ const last=days[days.length-1]; last.c=+qt[3]; last.h=Math.max(last.h,+qt[3]); }
+            return days.slice(-lmt);
+          }
+        }
+      }
     }catch(e){}
-    await new Promise(r=>setTimeout(r,250*(att+1)));
+    // 2) 新浪日线
+    try{
+      const cbN='ns'+Math.floor(Math.random()*1e6);
+      const d=await new Promise(function(res,rej){
+        window[cbN]=function(x){ delete window[cbN]; s.remove(); res(x); };
+        const s=document.createElement('script');
+        s.src='https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20'+cbN+'/CN_MarketDataService.getKLineData?symbol='+sym+'&scale=240&ma=no&datalen='+lmt;
+        s.onerror=function(){ delete window[cbN]; s.remove(); rej(new Error('net')); };
+        document.body.appendChild(s);
+        setTimeout(function(){ if(window[cbN]){ delete window[cbN]; s.remove(); rej(new Error('timeout')); } },9000);
+      });
+      if(Array.isArray(d)&&d.length) return d.map(function(p){ return {date:p.day,o:+p.open,h:+p.high,l:+p.low,c:+p.close,v:+p.volume}; });
+    }catch(e){}
+    // 3) 东财 kline（串行+退避；限流环境下大概率失败，留兜底）
+    try{
+      const dd=await jsonp('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secidOf(code)+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58&klt=101&fqt=1&end=20500101&lmt='+lmt);
+      const kls=dd&&dd.data&&dd.data.klines;
+      if(Array.isArray(kls)&&kls.length) return kls.map(function(k){ const p=k.split(','); return {date:p[0],o:+p[2],c:+p[3],h:+p[4],l:+p[5],v:+p[6],a:+p[7]}; });
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,350*(att+1)));
   }
   return [];
 }
