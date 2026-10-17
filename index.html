@@ -97,6 +97,23 @@
   #kmTip .t-row b{color:#e6edf3;font-weight:400;font-family:Consolas,monospace}
   #kmTip .t-up{color:#f85149;font-weight:600}
   #kmTip .t-dn{color:#3fb950;font-weight:600}
+  /* K线周期切换 + 买点时间窗预测条 */
+  .km-tabs{display:inline-flex;gap:4px;margin-left:8px;background:#161b22;border:1px solid #30363d;border-radius:999px;padding:3px}
+  .km-tabs span{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;color:#8b949e;cursor:pointer;user-select:none}
+  .km-tabs span:hover{color:#e6edf3}
+  .km-tabs span.km-on{background:#1f6feb;color:#fff;font-weight:600}
+  #kmForecast{margin:4px 0 10px;border:1px dashed #30363d;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.85;background:rgba(31,111,235,.04)}
+  #kmForecast .fw-h{color:#58a6ff;font-weight:700;font-size:12.5px}
+  #kmForecast .fw-h em{font-style:normal;color:#e3b341;font-size:11px;font-weight:400}
+  #kmForecast b.r{color:#f85149}
+  #kmForecast b.g{color:#3fb950}
+  #kmForecast .fw-w{display:inline-block;margin:2px 6px 2px 0;padding:1px 8px;border-radius:6px;background:#21262d;border:1px solid #30363d;color:#c9d1d9}
+  #kmForecast .fw-w.on{border-color:#1f6feb;background:#1f6feb22;color:#79c0ff;font-weight:600}
+  #kmForecast .fw-disc{color:#8b949e;font-size:11px;margin-top:4px}
+  /* 实时行情跳动点 */
+  .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#3fb950;margin-right:4px;animation:liveBlink 1.6s ease-in-out infinite;vertical-align:1px}
+  @keyframes liveBlink{0%,100%{opacity:.25}50%{opacity:1}}
+  td.live-chg{font-variant-numeric:tabular-nums}
   .klegend{font-size:12px;color:var(--sub);margin:4px 0 8px;display:flex;gap:14px;flex-wrap:wrap}
   .klegend b{color:var(--tx)}
   .klegend .ma5c{color:#e8d44d}.klegend .ma10c{color:#58a6ff}.klegend .ma20c{color:#c678dd}
@@ -117,7 +134,7 @@
 <header>
   <div class="wrap header-in">
     <h1>股票分析 · <span>智能选股 &amp; 持仓监控</span></h1>
-    <div class="status" id="netStatus">数据源：东方财富免费行情</div>
+    <div class="status" id="netStatus">数据源：腾讯实时行情</div>
     <div class="tabs">
       <div class="tab active" data-view="pick">智能选股</div>
       <div class="tab" data-view="holdings">我的持仓</div>
@@ -206,7 +223,7 @@
   </section>
 
   <div class="foot">
-    数据来源：东方财富免费行情（实时快照 + 日K线）。刷新受免费接口限制，行情有延迟，仅供学习参考。<br>
+    数据来源：腾讯免费行情（实时快照 + 多周期K线，行情列交易时段约每10秒刷新）。免费接口有延迟，仅供学习参考，不构成投资建议。<br>
     本工具仅基于技术指标自动计算，不构成任何投资建议。股市有风险，入市需谨慎。
   </div>
 </main>
@@ -217,9 +234,15 @@
     <div class="modal-head">
       <h2 id="kmTitle" style="margin:0"></h2>
       <div class="muted" id="kmSub">日K · 近120个交易日</div>
+      <span class="km-tabs" id="kmTabs">
+        <span class="km-on" onclick="openKline(KM.cur?KM.cur.code:'',KM.cur?KM.cur.name:'', 'day')">日K</span>
+        <span onclick="openKline(KM.cur?KM.cur.code:'',KM.cur?KM.cur.name:'', 'h60')">60分</span>
+        <span onclick="openKline(KM.cur?KM.cur.code:'',KM.cur?KM.cur.name:'', 'm5')">5分</span>
+      </span>
       <span class="m-close" onclick="closeKline()">✕</span>
     </div>
     <div class="klegend" id="kmLegend"></div>
+    <div id="kmForecast" style="display:none"></div>
     <canvas id="kmCanvas" width="880" height="400" style="width:100%;height:auto"></canvas>
     <div id="kmTip"></div>
     <div class="muted" style="font-size:11px;margin-top:8px">蜡烛：<b style="color:#f85149">红涨</b> / <b style="color:#3fb950">绿跌</b>；黄线 MA5 · 蓝线 MA10 · 紫线 MA20；下方为成交量。鼠标悬停/点击显示十字光标、日期与价格。数据仅供参考。</div>
@@ -485,36 +508,49 @@ async function fetchAllMarket(onProgress){
   return {map:out, total:total, failedPages: 0};
 }
 /* K线 v3：主源 proxy.finance.qq.com（腾讯系，含 qt+mkline），备源新浪，末备东财 */
-async function fetchKline(code,lmt){
-  lmt=lmt||60;
+/* K线 v4：多周期（日/h60/m5），腾讯 mkline 主源；备源仅日K */
+function mklineUrl(sym,m,count){ return 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/kline/mkline?param='+sym+','+m+',,'+count; }
+async function fetchMkRaw(sym,m,count){
+  const r=await fetch(mklineUrl(sym,m,count),{cache:'no-store'});
+  if(!r.ok) throw new Error('net');
+  const j=await r.json();
+  const node=(j&&j.data&&j.data[sym])||{};
+  const mk=node[m]||[];
+  if(!Array.isArray(mk)||mk.length<10) throw new Error('empty');
+  return {qt:node.qt||null, rows:mk.map(function(row){ return {date:String(row[0]||''),o:+row[1],c:+row[2],h:+row[3],l:+row[4],v:+row[5]}; })};
+}
+async function fetchKline(code,lmt,period){
+  lmt=lmt||60; period=period||'day';
   const sym=(code[0]==='6'||code[0]==='5')?('sh'+code):('sz'+code);
+  // ---- 周期型（60分钟/5分钟）：直接用腾讯 mkline 原始行 ----
+  if(period==='h60'||period==='m5'){
+    for(let att=0;att<3;att++){
+      try{
+        const raw=await fetchMkRaw(sym, period==='h60'?'m60':'m5', period==='h60'?600:640);
+        const rows=raw.rows;
+        if(raw.qt&&raw.qt[3]>0&&rows.length){ const last=rows[rows.length-1]; last.c=+raw.qt[3]; last.h=Math.max(last.h,+raw.qt[3]); }
+        return rows.slice(-lmt);
+      }catch(e){ await new Promise(r=>setTimeout(r,400*(att+1))); }
+    }
+    return [];
+  }
+  // ---- 日K（默认）：m60 聚合（现状逻辑，备源不变） ----
   for(let att=0; att<3; att++){
     // 1) 腾讯 mkline 分钟线（m60，600根≈约60个交易日；日聚合出日K）
     try{
-      const r=await fetch('https://proxy.finance.qq.com/ifzqgtimg/appstock/app/kline/mkline?param='+sym+',m60,,600',{cache:'no-store'});
-      if(r.ok){
-        const j=await r.json();
-        const node=j&&j.data&&j.data[sym]||{};
-        const qt=node.qt;
-        const mk=node.m60||[];
-        // 每行 m60: [ 'YYYY-MM-DD HH:MM', open, close, high, low, volume ]
-        if(Array.isArray(mk)&&mk.length>=10){
-          // 按日聚合 m60：同日期取首开/末收/最高/最低/累量
-          // 注：腾讯 mkline 每行列序为 [时间YYYYMMDDHHmm, 开, 收, 高, 低, 量]（第2列是收盘）
-          const byDate={}; const order=[];
-          mk.forEach(function(row){
-            const d=String(row[0]||'').slice(0,8);
-            if(!d) return;
-            if(!(d in byDate)){ const b={date:d,o:+row[1],c:+row[2],h:+row[3],l:+row[4],v:+row[5]}; byDate[d]=b; order.push(d); }
-            else{ const b=byDate[d]; b.c=+row[2]; b.h=Math.max(b.h,+row[3]); b.l=Math.min(b.l,+row[4]); b.v+=+row[5]; }
-          });
-          const days=order.map(function(d){ return byDate[d]; });
-          if(days.length){
-            // 最新价对齐：qt[3]=现价
-            if(qt&&qt[3]>0){ const last=days[days.length-1]; last.c=+qt[3]; last.h=Math.max(last.h,+qt[3]); }
-            return days.slice(-lmt);
-          }
-        }
+      const raw=await fetchMkRaw(sym,'m60',600);
+      const qt=raw.qt, mk=raw.rows;
+      const byDate={}; const order=[];
+      mk.forEach(function(row){
+        const d=row.date.slice(0,8);
+        if(!d) return;
+        if(!(d in byDate)){ const b={date:d,o:row.o,c:row.c,h:row.h,l:row.l,v:row.v}; byDate[d]=b; order.push(d); }
+        else{ const b=byDate[d]; b.c=row.c; b.h=Math.max(b.h,row.h); b.l=Math.min(b.l,row.l); b.v+=row.v; }
+      });
+      const days=order.map(function(d){ return byDate[d]; });
+      if(days.length){
+        if(qt&&qt[3]>0){ const last=days[days.length-1]; last.c=+qt[3]; last.h=Math.max(last.h,+qt[3]); }
+        return days.slice(-lmt);
       }
     }catch(e){}
     // 2) 新浪日线
@@ -626,32 +662,142 @@ async function confirmAndRender(items,scopeText){
   }
   items.forEach(it=>{ if(it.score==null)it.score=it.base; });
   items.sort((a,b)=>b.score-a.score);
-  let h='<table class="tbl"><thead><tr><th style="width:40px">名次</th><th>股票</th><th>现价</th><th>涨跌幅</th><th>量比</th><th>换手</th><th>成交额</th><th>综合分</th><th>状态</th><th style="width:74px">操作</th></tr></thead><tbody>';
-  items.slice(0,15).forEach((it,i)=>{
+  let h='<table class="tbl"><thead><tr><th style="width:40px">名次</th><th>股票</th><th>现价<span class="live-dot" title="交易时段每10秒刷新"></span></th><th>涨跌幅</th><th>量比</th><th>换手</th><th>成交额</th><th>综合分</th><th>状态</th><th style="width:74px">操作</th></tr></thead><tbody>';
+  var show=items.slice(0,15);
+  PICK.rows=show.map(x=>({code:x.code}));
+  show.forEach((it,i)=>{
     const z=it.q.f3>=0?'up':'down';
     const rkCls=i<3?'rank r'+(i+1):'rank';
     const tag=i<3?'<span class="tag buy">建议关注 · 可买入</span>':'<span class="tag watch">可跟踪</span>';
+    const fwTag=i<3?'<span class="tag buy" style="cursor:pointer" title="点击查看买入时间窗预测" onclick="openKline(\''+it.code+'\',\''+it.name+'\',\'day\')">⏱ 时间窗</span>':'';
     const tags=(it.tags||[]).map(t=>'<span class="tag hold">'+t+'</span>').join('');
     let bp=null;
     if(i<3&&it.kl&&buyPointOf(it.q,it.kl)) bp=buyPointOf(it.q,it.kl); if(bp) alertBuy(it.name,it.code,bp,it.q);
     const bpTag=bp?('<span class="tag buy">买点 · '+bp+'</span>'):'';
     const scCls=it.score>=75?'up':it.score>=60?'flat':'down';
-    h+='<tr>'
+    h+='<tr data-code="'+it.code+'">'
       +'<td><span class="'+rkCls+'">'+(i+1)+'</span></td>'
-      +'<td><a class="stocklink" onclick="openKline(\''+it.code+'\',\''+it.name+'\')"><b>'+it.name+'</b></a><div class="muted">'+it.code+'</div></td>'
-      +'<td class="'+z+'">'+fp(it.q.f2)+'</td>'
-      +'<td class="'+z+'">'+pf(it.q.f3)+'</td>'
-      +'<td>'+f1(it.q.f10)+'</td>'
-      +'<td>'+f1(it.q.f8)+'%</td>'
-      +'<td>'+money(it.q.f6)+'</td>'
+      +'<td><a class="stocklink" onclick="openKline(\''+it.code+'\',\''+it.name+'\',\'day\')"><b>'+it.name+'</b></a><div class="muted">'+it.code+'</div></td>'
+      +'<td class="'+z+'" data-live="price">'+fp(it.q.f2)+'</td>'
+      +'<td class="'+z+'" data-live="chg">'+pf(it.q.f3)+'</td>'
+      +'<td data-live="lb">'+f1(it.q.f10)+'</td>'
+      +'<td data-live="hs">'+f1(it.q.f8)+'%</td>'
+      +'<td data-live="amt">'+money(it.q.f6)+'</td>'
       +'<td class="score '+scCls+'">'+it.score+'<small>分</small></td>'
-      +'<td>'+tag+bpTag+tags+'</td>'
+      +'<td>'+tag+bpTag+fwTag+tags+'</td>'
       +'<td><button class="btn mini-btn" onclick="buyStock(\''+it.code+'\',\''+it.name+'\','+it.q.f2+')">买入监测</button></td>'
       +'</tr>';
   });
   h+='</tbody></table>';
   wrap.innerHTML=h;
   st.textContent='更新于 '+timeText()+'（'+scopeText+'）';
+  liveRefreshPick(true);
+}
+
+/* ============ 实时列刷新（轻量：仅行情五列，不重算名次） ============ */
+var PICK={rows:[]};
+var liveTimer=null;
+async function liveRefreshPick(first){
+  if(!PICK.rows.length) return;
+  if(!first&&document.hidden) return; // 页面不可见时暂停，节约免费接口
+  var codes=PICK.rows.map(function(r){return r.code;});
+  var fresh=null;
+  try{ fresh=await fetchQuotesTencent(codes); }catch(e){}
+  if(!fresh||!Object.keys(fresh).length) return;
+  var n=0;
+  codes.forEach(function(c){
+    var q=fresh[c]; if(!q) return;
+    var tr=document.querySelector('tr[data-code="'+c+'"]');
+    if(!tr) return; n++;
+    function setTd(f,val,cls){ var td=tr.querySelector('td[data-live="'+f+'"]'); if(!td) return; td.textContent=val; if(cls) td.className=cls; }
+    var z=(q.f3>=0)?'up':'down';
+    setTd('price',fp(q.f2),z);
+    setTd('chg',pf(q.f3),z);
+    setTd('lb',f1(q.f10));
+    setTd('hs',f1(q.f8)+'%');
+    setTd('amt',money(q.f6));
+  });
+  if(n){
+    var st=el('pickStatus');
+    if(st){ st.innerHTML='<span class="live-dot"></span>实时更新 '+timeText()+'（行情列每10秒 · '+(isTradingTime()?'交易中':'非交易时段·最近收盘快照')+'）'; }
+  }
+}
+
+/* ============ 买入时间窗预测（规则模型） ============ */
+function vwapOfDay(mins){
+  if(!mins||!mins.length) return null;
+  var lastDay=String(mins[mins.length-1].date||'').slice(0,8);
+  if(!lastDay) return null;
+  var pv=0,vv=0,hi=-Infinity,lo=Infinity;
+  mins.forEach(function(k){
+    if(String(k.date||'').slice(0,8)!==lastDay) return;
+    var c=(k.c||0); var tp=((k.h!=null?k.h:c)+(k.l!=null?k.l:c)+c)/3;
+    pv+=tp*(k.v||0); vv+=(k.v||0);
+    if(k.h!=null&&k.h>hi)hi=k.h; if(k.l!=null&&k.l<lo)lo=k.l;
+  });
+  if(!vv||!pv) return null;
+  return {day:lastDay, vwap:pv/vv, high:(hi===-Infinity?null:hi), low:(lo===Infinity?null:lo)};
+}
+function buyWindowForecast(q,d){
+  var cur=(q&&q.f2)||0, chg=(q&&q.f3)||0, lb=(q&&q.f10)||1, dayTxt=kmDateTxt(d.day);
+  var state,wins,advice,ref,stop;
+  if(chg>=5){
+    state='<b class="r">已大涨 '+pf(chg)+'，追高风险大</b>';
+    wins=[{t:'09:45-10:10',n:'回避',lv:0},{t:'13:30-14:00',n:'回避',lv:0},{t:'14:30-14:55',n:'尾盘小仓（唯一可考虑）',lv:2}];
+    advice='今日不建议追买；若 14:30 后仍强于大盘，可尾盘超小仓试探，其余等待回踩。';
+    ref='参考位：5日线附近（今日不追）；VWAP≈'.concat(fp(d.vwap));
+    stop=('跌破 VWAP×0.99（≈'+fp(d.vwap*0.99)+'）放弃，等回踩5日线再评估');
+  } else if(chg<=-3){
+    state='<b class="g">明显走弱 '+pf(chg)+'</b>';
+    wins=[{t:'09:45-10:10',n:'仅观察',lv:1},{t:'13:30-14:00',n:'放量收复VWAP才看',lv:2},{t:'14:30-14:55',n:'尾盘定夺',lv:1}];
+    advice='今日以观望为主；除非午后放量收复日内均价(VWAP≈'+fp(d.vwap)+')，否则等下个交易日。';
+    ref='参考位：VWAP ≈'+fp(d.vwap)+'，收复其上0.3%才考虑';
+    stop='当日弱势，不满足条件即不买入';
+  } else if(cur>d.vwap*1.005){
+    state='强势：现价在日内均价上方 '+(((cur/d.vwap)-1)*100).toFixed(2)+'%';
+    wins=[{t:'09:45-10:10',n:'回踩VWAP低吸·首选',lv:3},{t:'13:30-14:00',n:'午后二次低吸',lv:2},{t:'14:30-14:55',n:'尾盘未回踩则小仓',lv:1}];
+    advice='回调至 VWAP（≈'+fp(d.vwap)+'）企稳是今日性价比最好的介入点；若全天不给回踩，尾盘 14:30 后小仓。';
+    ref='参考买价：VWAP ± 0.3%（≈'+fp(d.vwap*0.997)+' ~ '+fp(d.vwap*1.003)+'）';
+    stop='跌破 VWAP×0.99（≈'+fp(d.vwap*0.99)+'）转观望';
+  } else if(cur<d.vwap*0.995){
+    state='偏弱：现价在日内均价下方 '+((1-cur/d.vwap)*100).toFixed(2)+'%';
+    wins=[{t:'09:45-10:10',n:'不建议',lv:0},{t:'13:30-14:00',n:'放量收复VWAP跟进',lv:3},{t:'14:30-14:55',n:'尾盘定夺',lv:2}];
+    advice='等午后放量收复 VWAP（≈'+fp(d.vwap)+'）再介入；早盘惯性下探不接。';
+    ref='参考买价：VWAP 上方 0.3%（≈'+fp(d.vwap*1.003)+'）触发';
+    stop='再度跌回 VWAP 下方则离场等次日';
+  } else {
+    state='贴近日内均价，多空平衡';
+    wins=[{t:'09:45-10:30',n:'方向确认',lv:3},{t:'13:30-14:00',n:'午后顺势',lv:2},{t:'14:30-14:55',n:'尾盘定夺',lv:1}];
+    advice='价格贴 VWAP（≈'+fp(d.vwap)+'）；上午看能否放量站上去，站上后回踩不破可介入。';
+    ref='参考买价：站上 VWAP 后回踩不破（≈'+fp(d.vwap)+'）';
+    stop='站不上 VWAP 保持观望';
+  }
+  return {dayTxt:dayTxt,state:wins?state:state,wins:wins,advice:advice,ref:ref,stop:stop,
+          cur:cur,chg:chg,lb:lb,vwap:d.vwap,hi:d.high,lo:d.low};
+}
+async function renderForecast(code,name){
+  var fcEl=el('kmForecast'); if(!fcEl) return;
+  // 不设 loading 态（静默加载，避免闪烁）
+  var q=null,mins=null;
+  try{ var m=await fetchQuotesTencent([code]); q=m&&m[code]; }catch(e){}
+  try{ mins=await fetchKline(code,600,'m5'); }catch(e){ mins=null; }
+  var d=(mins&&mins.length)?vwapOfDay(mins):null;
+  if(!q||!d){ fcEl.style.display='none'; return; }
+  var f=buyWindowForecast(q,d);
+  if(!f){ fcEl.style.display='none'; return; }
+  var pills=f.wins.filter(function(w){return w&&w.t&&w.t!=='——';}).map(function(w){
+    return '<span class="fw-w'+(w.lv>=3?' on':'')+'">'+w.t+' '+w.n+(w.lv>=3?' · 首选':'')+'</span>';
+  }).join('');
+  var rows=f.wins||[];
+  fcEl.innerHTML='<div class="fw-h">⏱ 买入时间窗预测 · '+f.dayTxt+' <em>（规则模型，非精确预言）</em></div>'
+    +'<div>现价 <b class="'+(f.chg>=0?'r':'g')+'">'+fp(f.cur)+'（'+pf(f.chg)+'）</b> · 量比 '+f1(f.lb)
+    +' · 日内均价(VWAP) <b>'+fp(f.vwap)+'</b> · 日内区间 '+fp(f.lo)+' ~ '+fp(f.hi)+'</div>'
+    +'<div>状态：'+f.state+'</div>'
+    +'<div>时间窗：'+pills+'</div>'
+    +'<div>策略：'+f.advice+'</div>'
+    +'<div>'+f.ref+' ｜ '+f.stop+'</div>'
+    +'<div class="fw-disc">规则基于日内均价(VWAP)与常见交易节奏生成，仅供参考，不构成投资建议。</div>';
+  fcEl.style.display='block';
 }
 
 /* ============ 买点判定 + 买点提醒 ============ */
@@ -688,15 +834,24 @@ function alertBuy(name,code,type,q){
 
 /* ============ K线图弹窗（v3：十字光标 + 日期/价格提示） ============ */
 function closeKline(){ var m=el('klineModal'); if(m) m.style.display='none'; hideKmTip(); }
-async function openKline(code,name){
-  var m=el('klineModal'); if(!m) return;
+async function openKline(code,name,period){
+  var m=el('klineModal'); if(!m||!code) return;
+  period=period||'day';
+  KM.period=period;
+  try{ KM.cur={code:code,name:name}; }catch(e){}
   el('kmTitle').innerHTML='<b>'+name+'</b> <span class="muted" style="font-weight:400">'+code+'</span>';
+  var subMap={day:'日K · 近120个交易日',h60:'60分钟K · 近120根（约18个交易日）',m5:'5分钟K · 近120根（约2个交易日）'};
+  var subEl=el('kmSub'); if(subEl) subEl.textContent=subMap[period]||subMap.day;
+  var tabsEl=el('kmTabs');
+  if(tabsEl){ Array.prototype.forEach.call(tabsEl.children,function(sp,ix){ sp.className=(['day','h60','m5'][ix]===period)?'km-on':''; }); }
   el('kmLegend').textContent='K线加载中…';
   m.style.display='flex';
   m.onclick=function(e){ if(e.target===m) closeKline(); };
   hideKmTip();
+  var fc=el('kmForecast'); if(fc){ fc.style.display='none'; fc.innerHTML=''; }
+  try{ renderForecast(code,name); }catch(e){}
   var kl=[];
-  try{ kl=await fetchKline(code,120); }catch(e){}
+  try{ kl=await fetchKline(code,120,period); }catch(e){}
   if(!kl.length){ el('kmLegend').textContent='K线数据未取到（接口限流或网络问题），稍后再点一次'; return; }
   drawKline(code,name,kl);
 }
@@ -726,7 +881,7 @@ function drawKline(code,name,kl){
   var cw=(cssW-padL-padR)/N;
   KM.st={cv:cv,ctx:cv.getContext('2d'),dpr:dpr,cssW:cssW,cssH:cssH,priceH:priceH,volY0:volY0,volTop:volTop,
          padL:padL,padR:padR,hi:hi,lo:lo,vmax:vmax,N:N,cw:cw,sub:sub,
-         s5:s5,s10:s10,s20:s20,closesAll:closesAll,code:code,name:name};
+         s5:s5,s10:s10,s20:s20,closesAll:closesAll,code:code,name:name,period:(KM.period||'day')};
   KM.paint(null);
   bindKlineEvents(cv);
 }
@@ -789,7 +944,7 @@ KM.paint=function(pos){
   var chg=(prev.c? (last.c-prev.c)/prev.c*100 : 0);
   var rsiNow=rsiOf(s.closesAll);
   var m20v=s.s20[s.s20.length-1];
-  var posTxt=(m20v!=null&&last.c>=m20v)?'站上20日线':'跌破20日线';
+  var posTxt=(m20v!=null&&last.c>=m20v)?(s.period==='day'?'站上20日线':'站上MA20'):(s.period==='day'?'跌破20日线':'跌破MA20');
   el('kmLegend').innerHTML='MA5 <b class="ma5c">'+fp(s.s5[s.s5.length-1])+'</b> · MA10 <b class="ma10c">'+fp(s.s10[s.s10.length-1])+'</b> · MA20 <b class="ma20c">'+fp(m20v)+'</b> · RSI14 <b>'+fp(rsiNow)+'</b> · 现价 <b class="'+(chg>=0?'up':'down')+'">'+fp(last.c)+'（'+(chg>=0?'+':'')+chg.toFixed(2)+'%）</b> · <b>'+posTxt+'</b>';
 }
 
@@ -838,7 +993,8 @@ function showKmTip(i,mx,my){
 }
 function kmDateTxt(d){
   d=String(d==null?'':d);
-  if(/^\d{12}$/.test(d)||/^\d{8}$/.test(d)) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8);
+  if(/^\d{12}$/.test(d)) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8)+' '+d.slice(8,10)+':'+d.slice(10,12);
+  if(/^\d{8}$/.test(d)) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8);
   return d.slice(0,10);
 }
 function hideKmTip(){ var t=document.getElementById('kmTip'); if(t){ t.style.display='none'; } }
@@ -1190,14 +1346,16 @@ el('btnPoolReset').addEventListener('click',resetPool);
 /* 定时刷新 + 时段校准 */
 let pickTimer=null, holdTimer=null;
 function schedule(){
-  clearInterval(pickTimer); clearInterval(holdTimer);
+  clearInterval(pickTimer); clearInterval(holdTimer); clearInterval(liveTimer);
   if(isTradingTime()){
     const pickMs=getScanMode()==='pool'?60000:180000;
     pickTimer=setInterval(runScan,pickMs); holdTimer=setInterval(refreshHoldings,30000);
-    const lbl=getScanMode()==='pool'?'选股 60s':'全市场扫描 3 分钟';
-    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>交易时段</b>（'+lbl+' / 持仓 30s 自动刷新）';
+    liveTimer=setInterval(function(){liveRefreshPick(false);},10000);
+    const lbl=getScanMode()==='pool'?'选股 60s 重扫':'全市场 3 分钟重扫';
+    el('netStatus').innerHTML='数据源：腾讯实时行情 · <b>交易时段</b>（'+lbl+' / 行情列 10s / 持仓 30s）';
   }else{
-    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>当前非交易时段</b>（点「立即扫描」可随时手动扫描）';
+    liveTimer=setInterval(function(){liveRefreshPick(false);},30000);
+    el('netStatus').innerHTML='数据源：腾讯实时行情 · <b>当前非交易时段</b>（行情列为最近快照，每30秒校准；点「立即扫描」可全量重扫）';
   }
 }
 setInterval(schedule,60000);
