@@ -111,6 +111,7 @@
       <h2>我的持仓 <small>监控每只持仓的卖出时机（止盈 / 止损 / 破位 / 超买）</small></h2>
       <div class="desc">添加你的持仓（代码 + 买入成本 + 数量，数据仅保存在本机浏览器）。系统会实时计算盈亏，并结合均线、RSI、量比给出「卖出 / 减仓 / 持有」建议。所有信号仅作参考，不构成投资建议。</div>
       <div class="toolbar">
+        <button class="btn" id="btnAddNew">＋ 添加持仓</button>
         <button class="btn" id="btnHoldRefresh">刷新持仓</button>
         <span class="hint" id="holdStatus"></span>
         <span style="flex:1"></span>
@@ -120,7 +121,7 @@
       </div>
       <div id="holdTableWrap"><div class="empty">还没有持仓，先添加一笔吧</div></div>
       <h2 style="margin-top:22px">添加持仓</h2>
-      <div class="form-row">
+      <div class="form-row" id="addHoldForm">
         <input id="hCode" placeholder="代码 如 600519" style="width:130px">
         <input id="hName" placeholder="名称 如 贵州茅台" style="width:140px">
         <input id="hCost" type="number" placeholder="买入成本价" style="width:120px">
@@ -366,12 +367,13 @@ function renderHoldings(list){
     +'<div class="stat"><div class="l">持仓成本</div><div class="v">'+fp(totCost)+'</div></div>'
     +'<div class="stat"><div class="l">累计盈亏</div><div class="v '+(totPnl>=0?'up':'down')+'">'+(totPnl>=0?'+':'')+totPnl.toFixed(2)+'%</div></div>'
     +'</div>';
-  h+='<table class="tbl"><thead><tr><th>股票</th><th>现价</th><th>涨跌幅</th><th>累计盈亏</th><th>持仓/成本</th><th>卖出建议</th><th style="width:60px">操作</th></tr></thead><tbody>';
+  h+='<table class="tbl"><thead><tr><th>股票</th><th>现价</th><th>涨跌幅</th><th>累计盈亏</th><th>持仓/成本</th><th>卖出建议</th><th style="width:110px">操作</th></tr></thead><tbody>';
   list.forEach((it,i)=>{
     if(it.missing){
       h+='<tr><td><b>'+it.name+'</b><div class="muted">'+it.code+'</div></td><td colspan="5" class="muted">未取到行情，请检查代码</td><td><span class="link" onclick="delHold('+i+')">删除</span></td></tr>';
       return;
     }
+    if(it.cur) lastPrice[it.code]=it.cur;
     const c=it.chg>=0?'up':'down'; const pc=it.pnl>=0?'up':'down';
     h+='<tr>'
       +'<td><b>'+it.name+'</b><div class="muted">'+it.code+'</div></td>'
@@ -380,7 +382,7 @@ function renderHoldings(list){
       +'<td class="pl '+pc+'">'+(it.pnl>=0?'+':'')+it.pnl.toFixed(2)+'%</td>'
       +'<td class="muted">'+numFmt(it.qty)+'股 / '+fp(it.cost)+'</td>'
       +'<td><span class="tag '+it.sig.color+'">'+it.sig.tag+'</span><div class="muted" style="font-size:11px">'+it.sig.reasons.join(' · ')+'</div></td>'
-      +'<td><span class="link" onclick="delHold('+i+')">删除</span></td>'
+      +'<td><span class="link" onclick="addShares('+i+')">＋加仓</span> <span class="link" style="margin-left:4px" onclick="delHold('+i+')">删除</span></td>'
       +'</tr>';
   });
   h+='</tbody></table>';
@@ -402,6 +404,23 @@ function addHolding(){
   ['hCode','hName','hCost','hQty','hTake','hStop'].forEach(id=>el(id).value='');
 }
 function delHold(i){ holdings.splice(i,1); saveHolds(); refreshHoldings(); }
+let lastPrice={};
+function addShares(i){
+  const h=holdings[i]; if(!h) return;
+  let cur = lastPrice[h.code];
+  const q=parseFloat(prompt('为「'+h.name+'」加仓，当前价约 '+(cur&&cur>0?fp(cur):'待输入')+'。请输入本次买入数量（股）：','100'));
+  if(!(q>0)) return;
+  let price = (cur&&cur>0)?cur:null;
+  if(!(price>0)){ price=parseFloat(prompt('未取到当前价，请输入本次买入价：','')); if(!(price>0)) return; }
+  const oldQty=h.qty||0, oldCost=h.cost||0;
+  h.qty=oldQty+q; h.cost=(oldCost*oldQty+price*q)/(oldQty+q);
+  saveHolds(); refreshHoldings(); toast('已加仓 '+h.name+' +'+q+'股，成本均 '+fp(h.cost));
+}
+function openAddForm(){
+  const f=document.getElementById('addHoldForm'); if(f) f.scrollIntoView({behavior:'smooth',block:'center'});
+  setTimeout(()=>{ const c=document.getElementById('hCode'); if(c) c.focus(); },300);
+}
+document.getElementById('btnAddNew').addEventListener('click',openAddForm);
 
 /* ============ 候选池 ============ */
 function renderPool(){
