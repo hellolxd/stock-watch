@@ -86,10 +86,17 @@
   .gate-tip{color:var(--sub);font-size:11px;line-height:1.8;margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
   /* K线弹窗 */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.66);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px}
-  .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;max-width:940px;width:100%}
+  .modal-card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;max-width:940px;width:100%}
   .modal-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;flex-wrap:wrap}
   .modal-head .m-close{cursor:pointer;color:var(--sub);font-size:20px;margin-left:auto;padding:0 4px}
   .modal-head .m-close:hover{color:var(--tx)}
+  /* K线十字光标 tooltip */
+  #kmTip{position:absolute;z-index:5;pointer-events:none;display:none;background:rgba(13,17,23,.94);border:1px solid #30363d;border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.75;min-width:150px;box-shadow:0 4px 14px rgba(0,0,0,.55)}
+  #kmTip .t-date{font-weight:700;color:#e6edf3;font-size:12.5px;margin-bottom:3px;border-bottom:1px dashed #30363d;padding-bottom:3px}
+  #kmTip .t-row{display:flex;justify-content:space-between;gap:16px;color:#8b949e}
+  #kmTip .t-row b{color:#e6edf3;font-weight:400;font-family:Consolas,monospace}
+  #kmTip .t-up{color:#f85149;font-weight:600}
+  #kmTip .t-dn{color:#3fb950;font-weight:600}
   .klegend{font-size:12px;color:var(--sub);margin:4px 0 8px;display:flex;gap:14px;flex-wrap:wrap}
   .klegend b{color:var(--tx)}
   .klegend .ma5c{color:#e8d44d}.klegend .ma10c{color:#58a6ff}.klegend .ma20c{color:#c678dd}
@@ -214,7 +221,8 @@
     </div>
     <div class="klegend" id="kmLegend"></div>
     <canvas id="kmCanvas" width="880" height="400" style="width:100%;height:auto"></canvas>
-    <div class="muted" style="font-size:11px;margin-top:8px">蜡烛：红涨绿跌；黄线 MA5 · 蓝线 MA10 · 紫线 MA20；下方为成交量。数据：东方财富，仅供参考。</div>
+    <div id="kmTip"></div>
+    <div class="muted" style="font-size:11px;margin-top:8px">蜡烛：<b style="color:#f85149">红涨</b> / <b style="color:#3fb950">绿跌</b>；黄线 MA5 · 蓝线 MA10 · 紫线 MA20；下方为成交量。鼠标悬停/点击显示十字光标、日期与价格。数据仅供参考。</div>
   </div>
 </div>
 
@@ -491,12 +499,14 @@ async function fetchKline(code,lmt){
         const mk=node.m60||[];
         // 每行 m60: [ 'YYYY-MM-DD HH:MM', open, close, high, low, volume ]
         if(Array.isArray(mk)&&mk.length>=10){
-          // 按“日”聚合 m60：同日期取分组首开/最高/最低/末收
+          // 按日聚合 m60：同日期取首开/末收/最高/最低/累量
+          // 注：腾讯 mkline 每行列序为 [时间YYYYMMDDHHmm, 开, 收, 高, 低, 量]（第2列是收盘）
           const byDate={}; const order=[];
           mk.forEach(function(row){
-            const d=row[0].slice(0,10);
-            if(!(d in byDate)){ const b={date:d,o:+row[1],h:+row[2],l:+row[3],c:+row[4],v:+row[5]}; byDate[d]=b; order.push(d); }
-            else{ const b=byDate[d]; b.h=Math.max(b.h,+row[2]); b.l=Math.min(b.l,+row[3]); b.c=+row[4]; b.v+=+row[5]; }
+            const d=String(row[0]||'').slice(0,8);
+            if(!d) return;
+            if(!(d in byDate)){ const b={date:d,o:+row[1],c:+row[2],h:+row[3],l:+row[4],v:+row[5]}; byDate[d]=b; order.push(d); }
+            else{ const b=byDate[d]; b.c=+row[2]; b.h=Math.max(b.h,+row[3]); b.l=Math.min(b.l,+row[4]); b.v+=+row[5]; }
           });
           const days=order.map(function(d){ return byDate[d]; });
           if(days.length){
@@ -676,19 +686,22 @@ function alertBuy(name,code,type,q){
   if(SET.notify&&window.Notification&&Notification.permission==='granted'){ try{ new Notification(name+' · 买点'+type,{body:'现价 '+fp(q&&q.f2)+'，涨幅 '+pf(q&&q.f3)}); }catch(e){} }
 }
 
-/* ============ K线图弹窗 ============ */
-function closeKline(){ var m=el('klineModal'); if(m) m.style.display='none'; }
+/* ============ K线图弹窗（v3：十字光标 + 日期/价格提示） ============ */
+function closeKline(){ var m=el('klineModal'); if(m) m.style.display='none'; hideKmTip(); }
 async function openKline(code,name){
   var m=el('klineModal'); if(!m) return;
   el('kmTitle').innerHTML='<b>'+name+'</b> <span class="muted" style="font-weight:400">'+code+'</span>';
   el('kmLegend').textContent='K线加载中…';
   m.style.display='flex';
   m.onclick=function(e){ if(e.target===m) closeKline(); };
+  hideKmTip();
   var kl=[];
   try{ kl=await fetchKline(code,120); }catch(e){}
   if(!kl.length){ el('kmLegend').textContent='K线数据未取到（接口限流或网络问题），稍后再点一次'; return; }
   drawKline(code,name,kl);
 }
+
+var KM={st:null};
 function drawKline(code,name,kl){
   var cv=document.getElementById('kmCanvas');
   if(!cv) return;
@@ -697,9 +710,6 @@ function drawKline(code,name,kl){
   var cssH=380;
   cv.width=Math.round(cssW*dpr); cv.height=Math.round(cssH*dpr);
   cv.style.width=cssW+'px'; cv.style.height=cssH+'px';
-  var ctx=cv.getContext('2d');
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,cssW,cssH);
   var closes=kl.map(function(k){return k.c;});
   var closesAll=closes.slice();
   var ma5=[],ma10=[],ma20=[],i,j;
@@ -714,33 +724,124 @@ function drawKline(code,name,kl){
   var pad=(hi-lo)*0.06; hi+=pad; lo-=pad;
   var N=sub.length||1;
   var cw=(cssW-padL-padR)/N;
-  var X=function(idx){ return padL+cw*idx+cw/2; };
-  var Y=function(p){ return 10+(priceH-20)*(hi-p)/(hi-lo); };
+  KM.st={cv:cv,ctx:cv.getContext('2d'),dpr:dpr,cssW:cssW,cssH:cssH,priceH:priceH,volY0:volY0,volTop:volTop,
+         padL:padL,padR:padR,hi:hi,lo:lo,vmax:vmax,N:N,cw:cw,sub:sub,
+         s5:s5,s10:s10,s20:s20,closesAll:closesAll,code:code,name:name};
+  KM.paint(null);
+  bindKlineEvents(cv);
+}
+KM.X=function(idx){ var s=KM.st; return s.padL+s.cw*idx+s.cw/2; };
+KM.Y=function(p){ var s=KM.st; return 10+(s.priceH-20)*(s.hi-p)/(s.hi-s.lo); };
+KM.P=function(y){ var s=KM.st; return s.hi-((y-10)/(s.priceH-20))*(s.hi-s.lo); }; // 像素y→价格
+KM.paint=function(pos){
+  var s=KM.st; if(!s) return;
+  var ctx=s.ctx;
+  var X=function(idx){ return s.padL+s.cw*idx+s.cw/2; };
+  var Y=function(p){ return 10+(s.priceH-20)*(s.hi-p)/(s.hi-s.lo); };
+  ctx.setTransform(s.dpr,0,0,s.dpr,0,0);
+  ctx.clearRect(0,0,s.cssW,s.cssH);
   ctx.font='10px sans-serif';
-  for(var g=0;g<=4;g++){ var p=lo+(hi-lo)*g/4; var yy=Y(p); ctx.strokeStyle='#232a33'; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(cssW-padR+6,yy); ctx.stroke(); ctx.fillStyle='#8b949e'; ctx.fillText(p.toFixed(2),cssW-padR+10,yy+3); }
-  ctx.strokeStyle='#232a33'; ctx.beginPath(); ctx.moveTo(padL,volY0); ctx.lineTo(cssW-padR+6,volY0); ctx.stroke();
-  if(vmax>0){ ctx.fillStyle='#8b949e'; ctx.fillText(Math.round(vmax/1e4)+'万',cssW-padR+10,volTop+8); }
-  for(i=0;i<N;i++){
-    var k=sub[i]; var x0=padL+cw*i; var bw=Math.max(1.5,cw*0.66);
+  var i,j;
+  // 网格与价格轴
+  for(var g=0;g<=4;g++){ var p=s.lo+(s.hi-s.lo)*g/4; var yy=Y(p); ctx.strokeStyle='#232a33'; ctx.beginPath(); ctx.moveTo(s.padL,yy); ctx.lineTo(s.cssW-s.padR+6,yy); ctx.stroke(); ctx.fillStyle='#8b949e'; ctx.fillText(p.toFixed(2),s.cssW-s.padR+10,yy+3); }
+  ctx.strokeStyle='#232a33'; ctx.beginPath(); ctx.moveTo(s.padL,s.volY0); ctx.lineTo(s.cssW-s.padR+6,s.volY0); ctx.stroke();
+  if(s.vmax>0){ ctx.fillStyle='#8b949e'; ctx.fillText(Math.round(s.vmax/1e4)+'万',s.cssW-s.padR+10,s.volTop+8); }
+  // 蜡烛 + 成交量（红涨绿跌）
+  for(i=0;i<s.N;i++){
+    var k=s.sub[i]; var x0=s.padL+s.cw*i; var bw=Math.max(1.5,s.cw*0.66);
     var up=(k.c>=k.o); var col=up?'#f85149':'#3fb950';
     ctx.strokeStyle=col; ctx.beginPath(); ctx.moveTo(X(i),Y(k.h)); ctx.lineTo(X(i),Y(k.l)); ctx.stroke();
     var yTop=Y(Math.max(k.o,k.c)); var yBot=Y(Math.min(k.o,k.c)); if(yBot-yTop<1) yBot=yTop+1;
-    ctx.fillStyle=col; ctx.fillRect(x0+cw/2-bw/2,yTop,bw,yBot-yTop);
-    var vh=vmax>0?(k.v/vmax)*(volY0-volTop-4):0;
-    if(vh>0){ ctx.fillStyle=up?'rgba(248,81,73,.5)':'rgba(63,185,80,.5)'; ctx.fillRect(x0+cw/2-bw/2,volY0-vh,bw,vh); }
+    ctx.fillStyle=col; ctx.fillRect(x0+s.cw/2-bw/2,yTop,bw,yBot-yTop);
+    var vh=s.vmax>0?(k.v/s.vmax)*(s.volY0-s.volTop-4):0;
+    if(vh>0){ ctx.fillStyle=up?'rgba(248,81,73,.5)':'rgba(63,185,80,.5)'; ctx.fillRect(x0+s.cw/2-bw/2,s.volY0-vh,bw,vh); }
+    if(pos&&i===pos.i){ // 选中K线高亮描边
+      ctx.strokeStyle='rgba(230,237,243,.85)'; ctx.lineWidth=1.2;
+      ctx.strokeRect(x0+s.cw/2-bw/2-2.5,yTop-2.5,bw+5,(yBot-yTop)+5);
+      ctx.lineWidth=1;
+    }
   }
   function line(arr,colr){ ctx.strokeStyle=colr; ctx.lineWidth=1.4; ctx.beginPath(); var on=false;
     for(j=0;j<arr.length;j++){ var v=arr[j]; if(v==null||!isFinite(v)){ on=false; continue; } var px=X(j),py=Y(v); if(!on){ ctx.moveTo(px,py); on=true; } else ctx.lineTo(px,py); }
     ctx.stroke(); ctx.lineWidth=1;
   }
-  line(s5,'#e8d44d'); line(s10,'#58a6ff'); line(s20,'#c678dd');
-  var last=sub[N-1]||{c:0}; var prev=sub[N-2]||last;
+  line(s.s5,'#e8d44d'); line(s.s10,'#58a6ff'); line(s.s20,'#c678dd');
+  // 十字光标 + 交点价格标签
+  if(pos){
+    var sx=X(pos.i), sy=pos.py;
+    ctx.save();
+    ctx.setLineDash([4,3]); ctx.strokeStyle='rgba(230,237,243,.55)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(sx,16); ctx.lineTo(sx,s.volY0); ctx.stroke();      // 竖线：对应时间/K线
+    ctx.beginPath(); ctx.moveTo(s.padL,sy); ctx.lineTo(s.cssW-s.padR+6,sy); ctx.stroke(); // 横线：对应价格
+    ctx.restore();
+    // 价格标签（右轴跟随）
+    var lbl=pos.px.toFixed(2);
+    ctx.font='10px Consolas,monospace';
+    var tw=ctx.measureText(lbl).width+10;
+    ctx.fillStyle='#1f6feb'; ctx.fillRect(s.cssW-s.padR+5,sy-8,Math.max(tw,44),16);
+    ctx.fillStyle='#fff'; ctx.fillText(lbl,s.cssW-s.padR+10,sy+3);
+    ctx.font='10px sans-serif';
+    // 十字交点
+    ctx.strokeStyle='#e6edf3'; ctx.beginPath(); ctx.arc(sx,sy,3.5,0,Math.PI*2); ctx.stroke();
+  }
+  // 图例（底部信息行）
+  var last=s.sub[s.N-1]||{c:0}; var prev=s.sub[s.N-2]||last;
   var chg=(prev.c? (last.c-prev.c)/prev.c*100 : 0);
-  var rsiNow=rsiOf(closesAll);
-  var m20v=s20[s20.length-1];
+  var rsiNow=rsiOf(s.closesAll);
+  var m20v=s.s20[s.s20.length-1];
   var posTxt=(m20v!=null&&last.c>=m20v)?'站上20日线':'跌破20日线';
-  el('kmLegend').innerHTML='MA5 <b class="ma5c">'+fp(s5[s5.length-1])+'</b> · MA10 <b class="ma10c">'+fp(s10[s10.length-1])+'</b> · MA20 <b class="ma20c">'+fp(m20v)+'</b> · RSI14 <b>'+fp(rsiNow)+'</b> · 现价 <b class="'+(chg>=0?'up':'down')+'">'+fp(last.c)+'（'+(chg>=0?'+':'')+chg.toFixed(2)+'%）</b> · <b>'+posTxt+'</b>';
+  el('kmLegend').innerHTML='MA5 <b class="ma5c">'+fp(s.s5[s.s5.length-1])+'</b> · MA10 <b class="ma10c">'+fp(s.s10[s.s10.length-1])+'</b> · MA20 <b class="ma20c">'+fp(m20v)+'</b> · RSI14 <b>'+fp(rsiNow)+'</b> · 现价 <b class="'+(chg>=0?'up':'down')+'">'+fp(last.c)+'（'+(chg>=0?'+':'')+chg.toFixed(2)+'%）</b> · <b>'+posTxt+'</b>';
 }
+
+/* K线交互：mousemove/click 显示时间与价格；mouseleave 清除 */
+function bindKlineEvents(cv){
+  if(!cv || cv.__kmBound) return;
+  cv.__kmBound=true;
+  var hit=function(e){
+    var s=KM.st; if(!s) return;
+    var rect=cv.getBoundingClientRect();
+    var mx=e.clientX-rect.left, my=e.clientY-rect.top;
+    if(mx<s.padL-6||mx>s.cssW-s.padR+6||my<10||my>s.volY0){ hideKmTip(); KM.paint(null); return; }
+    var idx=0,best=1e9;
+    for(var i=0;i<s.N;i++){ var d=Math.abs(KM.X(i)-mx); if(d<best){best=d;idx=i;} }
+    var px=Math.min(s.hi,Math.max(s.lo,KM.P(my)));
+    KM.paint({i:idx,py:my,px:px});
+    showKmTip(idx,mx,my);
+  };
+  cv.addEventListener('mousemove',hit);
+  cv.addEventListener('click',hit);
+  cv.addEventListener('mouseleave',function(){ hideKmTip(); KM.paint(null); });
+}
+function showKmTip(i,mx,my){
+  var s=KM.st; if(!s) return;
+  var tip=document.getElementById('kmTip'); if(!tip) return;
+  var k=s.sub[i]||{}; var prev=(i>0)?(s.sub[i-1]||{}):null;
+  var dTxt=kmDateTxt(k.date);
+  var chgTxt='--'; var chgCls='t-up';
+  if(prev&&prev.c){ var chg=(k.c-prev.c)/prev.c*100; chgTxt=(chg>=0?'+':'')+chg.toFixed(2)+'%'; chgCls=(chg>=0?'t-up':'t-dn'); }
+  else if(k.o){ var chg2=(k.c-k.o)/k.o*100; chgTxt=(chg2>=0?'+':'')+chg2.toFixed(2)+'%'; chgCls=(chg2>=0?'t-up':'t-dn'); }
+  var dayCls=(k.c!=null&&k.o!=null&&k.c>=k.o)?'t-up':'t-dn';
+  var vTxt=(k.v!=null)?(k.v>=1e4?(k.v/1e4).toFixed(2)+'万手':k.v+'手'):'--';
+  tip.innerHTML='<div class="t-date">'+dTxt+'</div>'
+    +'<div class="t-row">开 <b>'+fp(k.o)+'</b></div>'
+    +'<div class="t-row">高 <b>'+fp(k.h)+'</b></div>'
+    +'<div class="t-row">低 <b>'+fp(k.l)+'</b></div>'
+    +'<div class="t-row">收 <b class="'+dayCls+'">'+fp(k.c)+'</b></div>'
+    +'<div class="t-row">涨跌 <b class="'+chgCls+'">'+chgTxt+'</b></div>'
+    +'<div class="t-row">量 <b>'+vTxt+'</b></div>';
+  var cv=s.cv;
+  tip.style.display='block';
+  var left=cv.offsetLeft+mx+16, top=cv.offsetTop+my+14;
+  if(left+tip.offsetWidth>cv.offsetParent.clientWidth-8) left=cv.offsetLeft+mx-tip.offsetWidth-14;
+  if(top+tip.offsetHeight>cv.offsetParent.clientHeight-8) top=cv.offsetTop+my-tip.offsetHeight-12;
+  tip.style.left=left+'px'; tip.style.top=top+'px';
+}
+function kmDateTxt(d){
+  d=String(d==null?'':d);
+  if(/^\d{12}$/.test(d)||/^\d{8}$/.test(d)) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8);
+  return d.slice(0,10);
+}
+function hideKmTip(){ var t=document.getElementById('kmTip'); if(t){ t.style.display='none'; } }
 
 /* ============ 财经快讯（新浪滚动新闻 JSONP） ============ */
 function jsonpCustom(url,paramName){
@@ -824,8 +925,12 @@ function getAuth(){ try{ return JSON.parse(localStorage.getItem('tk_auth')||'nul
 function initGate(){
   var auth=getAuth();
   var gate=document.getElementById('loginGate');
-  if(!gate) { startApp(); return; }
-  GATE.node=gate; gate.style.display='flex';
+  if(!gate){ startApp(); return; }
+  GATE.node=gate;
+  // 本标签页会话内已验证过（SHA-256 比对通过）：刷新/重载不再要求登录；
+  // 关闭本页或新开标签页/窗口打开时才重新登录（符合预期安全习惯）
+  try{ if(sessionStorage.getItem('tk_ok')==='1'){ enterApp(); return; } }catch(e){}
+  gate.style.display='flex';
   document.getElementById('lgPass2').style.display=auth?'none':'block';
   document.getElementById('gateSub').textContent=auth?'请登录':'首次使用 · 请设置登录ID与密码';
   document.getElementById('lgBtn').onclick=gateSubmit;
@@ -861,6 +966,7 @@ function gateSubmit(){
   enterApp();
 }
 function enterApp(){
+  try{ sessionStorage.setItem('tk_ok','1'); }catch(e){}  // 标记本标签页会话已验证：刷新不再重登
   if(GATE.node){ GATE.node.remove(); GATE.node=null; }
   startApp();
 }
