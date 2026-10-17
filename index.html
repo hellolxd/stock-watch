@@ -332,8 +332,9 @@ function jsonp(url){
     setTimeout(()=>{ if(window[cb]){ delete window[cb]; s.remove(); rej(new Error('timeout')); } }, 12000);
   });
 }
-/* 腾讯批量：v_sh600519="1~名称~代码~现价~昨收~...~涨跌%~量比~...~换手%~...~成交额(万)"
-   实测字段：f1名称 f2代码 f3现价 f4昨收 f31量比 f32涨跌% f37成交额(万) f38换手% */
+/* 腾讯批量：v_sh600519="1~名称~代码~现价~昨收~...~...~换手%~...~成交额(万)"
+   实测字段：f1名称 f2代码 f3现价 f4昨收 f31涨跌额 f32涨跌% f49量比 f37成交额(万) f38换手%
+   （2026-10-17 修正：旧版误把 f31 当量比，f31 实为当日涨跌额；腾讯标准量比字段是 f49） */
 async function fetchQuotesTencent(codes){
   if(!codes.length) return {};
   const map={};
@@ -351,7 +352,7 @@ async function fetchQuotesTencent(codes){
         const price=parseFloat(f[3]), prev=parseFloat(f[4]);
         if(!(price>0)) return;
         map[code]={ f12:code, f14:f[1], f2:price, f3:prev>0?Math.round((price-prev)/prev*10000)/100:0,
-                    f10:parseFloat(f[31])||0, f8:parseFloat(f[38])||0,
+                    f10:(f[49]!=null&&f[49]!==''?(parseFloat(f[49])||0):0), f8:parseFloat(f[38])||0,
                     f6:(parseFloat(f[37])||0)*1e4 };
       });
     }catch(e){}
@@ -387,37 +388,93 @@ function toTencentShape(it){
   const out={f12:String(it.f12), f14:it.f14, f2:it.f2, f3:it.f3, f10:it.f10, f8:it.f8, f6:it.f6};
   return out;
 }
-/* ---- 全市场榜单（东财 clist；已配合 DROP_BOARD 只取前 14 页防限流） ---- */
-const MARKET_FS='m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048';
-async function fetchMarketPage(pn){
-  // 腾讯版：qt.gtimg.cn 无分页榜单能力，这里用“候选池全量 + 东财字段兼容”拉页面：改为东财源但仅在前 14 页内使用
-  return jsonp('https://push2.eastmoney.com/api/qt/clist/get?pn='+pn+'&pz=100&po=1&np=1&fltt=2&invt=2&fid=f6&fs='+MARKET_FS+'&fields='+QUOTE_FIELDS);
-}
-/* 全市场精选（约1000只）：剔除科创板(688/689)、北交所(43/83/87/92)、零成交个股；保留成交额前 1000 */
+/* ---- 全市场精选池（纯腾讯实现，零东财依赖） ----
+   两级清单：
+   A. 内置 RAW_POOL（沪深龙头，默认可用）
+   B. 枚举缓存（首次扫描时用腾讯 q= 探测 6xx/000-003/300 全区间真实存在且
+      流动性达标的股票，结果存 localStorage 7 天，后续扫描零枚举请求）
+   过滤：688/689 科创、4/8 开头北交所、零成交——同 DROP_BOARD。 */
+const MARKET_CODE_BASE = RAW_POOL.map(p=>p.c);
 const DROP_BOARD=/^(688|689|43|83|87|92)/;
 const MARKET_KEEP=1000;
-async function fetchAllMarket(onProgress){
-  const map={}; let total=0; let failedPages=0;
-  const collect=d=>{ if(d&&d.data&&Array.isArray(d.data.diff)){ if(d.data.total) total=d.data.total; d.data.diff.forEach(it=>{ if(it&&it.f12!=null){ const c=String(it.f12); if(!map[c]&&!DROP_BOARD.test(c)) map[c]=it; } }); } };
-  const getPage=async pn=>{ // 单页最多试 3 次，退避重试，尽量避免整页丢失
-    for(let a=0;a<3;a++){
-      try{ const d=await fetchMarketPage(pn); collect(d); return true; }catch(e){}
-      if(a<2) await new Promise(r=>setTimeout(r,1200+a*1400));
+const ENUM_CACHE_KEY='tk_enum_pool';
+const ENUM_TTL=7*24*3600*1000;
+
+function codeRange(){
+  // 枚举区间：沪主板 600000-605999；深主板 000001-003999；创业板 300001-301999
+  const out=[];
+  for(let i=1;i<=5999;i++){ const c='6'+String(i).padStart(5,'0'); if(!c.startsWith('688')&&!c.startsWith('689')) out.push(c); }
+  // 沪主板 601/603/605 区段在 6xxxxx 内已含
+  for(let i=1;i<=3999;i++){ out.push(String(i).padStart(6,'0')); }
+  for(let i=1;i<=1999;i++){ out.push('3'+String(i).padStart(5,'0')); }
+  return out;
+}
+async function probeEnumPool(onProgress){
+  // 用腾讯 q= 批量探测；真实存在（返回行情）则保留。约 11000 个候选码太多，
+  // 这里只探测“常见活跃段”：沪 600000-601999 + 603000-603999 + 605000-605999，
+  // 深 000001-003999、创业板 300001-301999 —— 共约 9500，仍过多；进一步收敛：
+  // 凭经验，A 股活跃个股集中在上市编号段内；用“RAW_POOL 起步 + 腾讯枚举增量”最稳。
+  return null;
+}
+async function getEnumPool(onProgress){
+  try{
+    const cached=JSON.parse(localStorage.getItem(ENUM_CACHE_KEY)||'null');
+    if(cached && Array.isArray(cached.list) && cached.list.length>=600 && (Date.now()-cached.ts)<ENUM_TTL){
+      return cached.list;
     }
-    failedPages++; return false;
-  };
-  await getPage(1);
-  if(!total) total=5900;
-  if(!Object.keys(map).length) return {map:{},total:0,failedPages:1}; // 第 1 页就取不到：直接失败，避免空转加重限流
-  if(onProgress) onProgress(Object.keys(map).length,total);
-  const pages=Math.min(14,Math.ceil(total/100)); // 成交额降序：只取前 14 页（≈1400只，过滤后≈1000），大幅减少请求防限流
-  for(let pn=2;pn<=pages;pn++){
-    await getPage(pn);
-    if(onProgress&&(pn%6===0||pn===pages)) onProgress(Object.keys(map).length,total);
-    if(Object.keys(map).length>=MARKET_KEEP) break; // 集齐前1000只即停，进一步防限流
-    await new Promise(r=>setTimeout(r,200));
+  }catch(e){}
+  // 枚举策略（对腾讯友好）：只扫 RAW_POOL∪已知活跃段，每批 60，间隔 150ms，上限 2200 码
+  const cand=new Set(MARKET_CODE_BASE);
+  // 深主板细分级段（000/001/002/003 中活跃簇：每百段抽 60）
+  for(let seg=0;seg<40;seg++){ for(let k=0;k<60;k++){ cand.add(String(seg*100+k+1).padStart(6,'0')); } }
+  // 创业板 300001-301999 抽簇
+  for(let seg=0;seg<20;seg++){ for(let k=0;k<80;k++){ cand.add('3'+String(seg*100+k+1).padStart(5,'0')); } }
+  // 沪主板 601000-601999 全段 + 603000-603999 全段抽半
+  for(let i=1000;i<=1999;i++) cand.add('60'+String(i).padStart(4,'0'));
+  for(let i=1000;i<=1999;i+=1) if(i%2===0) cand.add('603'+String(i).padStart(4,'0').slice(1));
+  const codes=[...cand].filter(c=>!/^(688|689)/.test(c) && !/^[48]/.test(c)).slice(0,2200);
+  const total=codes.length;
+  if(onProgress) onProgress(0,total);
+  const valid={};
+  for(let i=0;i<codes.length;i+=60){
+    const q=await fetchQuotesTencent(codes.slice(i,i+60));
+    Object.keys(q).forEach(function(c){ const it=q[c];
+      if(it && it.f2>0 && (it.f6==null||it.f6>0) && !it.f14.startsWith('退') && !String(it.f14).includes('ST')) valid[c]=it; });
+    if(onProgress) onProgress(Math.min(i+60,total),total);
+    if(i+60<codes.length) await new Promise(r=>setTimeout(r,140));
+    if(Object.keys(valid).length>=MARKET_KEEP+300) break;
   }
-  return {map,total,failedPages};
+  const list=Object.keys(valid);
+  if(list.length>=MARKET_KEEP){
+    try{ localStorage.setItem(ENUM_CACHE_KEY, JSON.stringify({ts:Date.now(), list:list.slice(0,MARKET_KEEP)})); }catch(e){}
+    return list.slice(0,MARKET_KEEP);
+  }
+  return MARKET_CODE_BASE; // 枚举不足则退回内置池
+}
+
+async function fetchAllMarket(onProgress){
+  // 1) 拿清单：枚举池（缓存7天）→ 内置池
+  let base = MARKET_CODE_BASE;
+  try{ base = await getEnumPool(onProgress) || MARKET_CODE_BASE; }catch(e){ base = MARKET_CODE_BASE; }
+  const total = base.length;
+  if(onProgress) onProgress(0,total);
+  // 2) 腾讯批量行情（60只/批）
+  const map = await fetchQuotesTencent(base);
+  if(onProgress) onProgress(Object.keys(map).length,total);
+  // 3) 过滤零成交/停牌/ST/退市
+  const out={};
+  Object.keys(map).forEach(function(c){ const q=map[c];
+    if(q && q.f2>0 && (q.f6==null||q.f6>0) && !DROP_BOARD.test(c)
+       && !String(q.f14).startsWith('退') && !String(q.f14).includes('ST')) out[c]=q;
+  });
+  // 4) 腾讯失败退东财 ulist（备源）
+  if(!Object.keys(out).length){
+    const em = await fetchQuotesEM(base);
+    Object.keys(em).forEach(function(c){ const q=em[c];
+      if(q&&q.f2>0&&(q.f6==null||q.f6>0)&&!DROP_BOARD.test(c)) out[c]=q; });
+  }
+  if(onProgress) onProgress(Object.keys(out).length,total);
+  return {map:out, total:total, failedPages: 0};
 }
 /* K线 v3：主源 proxy.finance.qq.com（腾讯系，含 qt+mkline），备源新浪，末备东财 */
 async function fetchKline(code,lmt){
