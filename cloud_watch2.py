@@ -38,10 +38,33 @@ DEDUP_HOURS = float(os.environ.get("DEDUP_HOURS", "24"))
 WATCHLIST = "watchlist.json"
 STATE     = "_state.json"
 
-# 卖出信号关键词（与网页/云端 v1 完全一致）
+# 卖出信号关键词（与网页/云端 v1 完全一致）——上行保持不动
 SELL_KEY  = ("止损", "止盈", "破位", "超买", "弱势")
 # 买点类型（与网页 buyPointOf 一致）
 BUY_KINDS = ("放量突破", "回踩企稳", "超卖反弹")
+
+# 全市场精选（约1000只）：剔除科创板(688/689)、北交所(43/83/87/92)与零成交个股，与网页端一致
+DROP_BOARDS = ("688", "689", "43", "83", "87", "92")
+
+
+def market_top(n=100):
+    """东财成交额榜（已剔科创/北交/零成交），返回前 n 个 {code,name,q}"""
+    try:
+        d = _get("https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1"
+                 "&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
+                 "&fields=f2,f3,f6,f8,f10,f12,f14")
+        diff = ((d or {}).get("data") or {}).get("diff") or []
+        out = []
+        for it in diff:
+            c = str(it.get("f12") or "")
+            if not c or c.startswith(DROP_BOARDS):
+                continue          # 科创板 / 北交所
+            if not (it.get("f6") or 0):
+                continue          # 零成交 / 停牌
+            out.append({"code": c, "name": it.get("f14") or "", "q": it})
+        return out[:n]
+    except Exception:
+        return []
 
 
 # ---------------- 基础工具 ----------------
@@ -287,17 +310,8 @@ def task_buy(st):
     codes = load_watchlist_codes()
     # 买入监测针对综合分靠前的股票；云端用「成交额榜单」近似：拉全市场前 100 页太多，
     # 这里改为：watchlist 内所有持仓 + 说明；若 watchlist 为空则直接用东财涨幅榜 Top100。
-    top = []
-    try:
-        d = _get("https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1"
-                 "&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
-                 "&fields=f2,f3,f6,f8,f10,f12,f14")
-        diff = ((d or {}).get("data") or {}).get("diff") or []
-        for it in diff:
-            if it and it.get("f12"):
-                top.append({"code": str(it["f12"]), "name": it.get("f14") or "", "q": it})
-    except Exception:
-        pass
+    top = market_top(100)
+    # market_top 已剔除科创板(688/689)、北交所(43/83/87/92)与零成交个股（约1000只池）
     # 补上持仓里的票
     for h in load_watchlist():
         code = h.get("code", "")
@@ -337,9 +351,16 @@ def task_buy(st):
 
 
 def task_brief(st):
-    """盘前简报：Top5 + 新闻"""
+    """盘前简报：Top5（全市场精选池，剔除科创/北交/零成交） + 新闻"""
+    top = market_top(100)
     qs = batch_quotes(load_watchlist_codes())
-    ranked = sorted(qs.items(), key=lambda kv: -(kv[1].get("f6") or 0))[:5]
+    for h in load_watchlist():
+        code = h.get("code", "")
+        if code and not any(t["code"] == code for t in top):
+            q = qs.get(code)
+            if q:
+                top.append({"code": code, "name": h.get("name", code), "q": q})
+    ranked = sorted(top, key=lambda t: -((t.get("q") or {}).get("f6") or 0))[:5]
     news = fetch_news(15)
     lines = ["【盘前简报】%s" % datetime.now(CST).strftime("%Y-%m-%d %H:%M"), ""]
     lines.append("一、Top5 候选（按成交额，仅供技术面参考）：")
