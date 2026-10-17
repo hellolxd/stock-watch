@@ -96,9 +96,13 @@
   <section class="view active" id="view-pick">
     <div class="card">
       <h2>智能选股 <small>从精选候选池中实时扫描，打分排序出「可买入」标的</small></h2>
-      <div class="desc">按「资金活跃度 + 量价动能 + 趋势强度」对候选池全部股票实时打分，再结合 5/10/20 日均线与 RSI 过滤，筛出当天最值得关注的 Top 标的。仅基于公开行情的技术面参考，不构成投资建议，请结合基本面独立判断。</div>
+      <div class="desc">默认<b>全市场扫描</b>：对沪深京全部 A 股（约 5900 只，覆盖率 99%+）按「资金活跃度 + 量价动能 + 趋势强度」实时打分，再用 5/10/20 日均线与 RSI 对前 10 名做 K 线确认，筛出当天最适合买入的标的。也可切换为「我的候选池」模式。仅基于公开行情的技术面参考，不构成投资建议。</div>
       <div class="toolbar">
         <button class="btn" id="btnScan">立即扫描</button>
+        <select id="scanMode" title="扫描范围">
+          <option value="market">全市场扫描（约5900只·覆盖99%）</option>
+          <option value="pool">我的候选池</option>
+        </select>
         <span class="hint" id="pickStatus"></span>
       </div>
       <div id="pickTableWrap"><div class="empty">点击「立即扫描」开始选股</div></div>
@@ -138,7 +142,7 @@
   <section class="view" id="view-pool">
     <div class="card">
       <h2>候选池管理 <small>智能选股在此范围内扫描</small></h2>
-      <div class="desc">内置约 60 只各行业龙头 / 活跃股。你可以增删股票来定制扫描范围，代码填 6 位数字即可。</div>
+      <div class="desc">内置 200+ 只各行业龙头 / 活跃股（金融/消费/医药/新能源/科技等全覆盖）。你可以增删股票来定制扫描范围，代码填 6 位数字即可。</div>
       <div class="toolbar">
         <input id="poolAddCode" placeholder="代码 如 000001" style="width:130px">
         <input id="poolAddName" placeholder="名称 如 平安银行" style="width:140px">
@@ -159,33 +163,76 @@
 <script>
 /* ============ 内置候选池（默认） ============ */
 const RAW_POOL = [
+  /* —— 沪市主板 · 金融 —— */
   {c:'600519',n:'贵州茅台'},{c:'601318',n:'中国平安'},{c:'600036',n:'招商银行'},{c:'600030',n:'中信证券'},
-  {c:'601899',n:'紫金矿业'},{c:'600900',n:'长江电力'},{c:'601857',n:'中国石油'},{c:'600028',n:'中国石化'},
-  {c:'601166',n:'兴业银行'},{c:'600276',n:'恒瑞医药'},{c:'600809',n:'山西汾酒'},{c:'600887',n:'伊利股份'},
-  {c:'600690',n:'海尔智家'},{c:'600104',n:'上汽集团'},{c:'600050',n:'中国联通'},{c:'601012',n:'隆基绿能'},
-  {c:'600438',n:'通威股份'},{c:'600585',n:'海螺水泥'},{c:'601088',n:'中国神华'},{c:'601398',n:'工商银行'},
-  {c:'601939',n:'建设银行'},{c:'601288',n:'农业银行'},{c:'601601',n:'中国太保'},{c:'600999',n:'招商证券'},
-  {c:'601211',n:'国泰君安'},{c:'600570',n:'恒生电子'},{c:'603288',n:'海天味业'},{c:'600309',n:'万华化学'},
-  {c:'600346',n:'恒力石化'},{c:'600031',n:'三一重工'},{c:'601766',n:'中国中车'},{c:'600906',n:'中国船舶'},
-  {c:'601390',n:'中国中铁'},{c:'600019',n:'宝钢股份'},{c:'601138',n:'工业富联'},{c:'603501',n:'韦尔股份'},
-  {c:'600941',n:'中国移动'},{c:'601728',n:'中国电信'},
+  {c:'601398',n:'工商银行'},{c:'601939',n:'建设银行'},{c:'601288',n:'农业银行'},{c:'601166',n:'兴业银行'},
+  {c:'600000',n:'浦发银行'},{c:'601998',n:'中信银行'},{c:'601818',n:'光大银行'},{c:'600016',n:'民生银行'},
+  {c:'601328',n:'交通银行'},{c:'601169',n:'北京银行'},{c:'601229',n:'上海银行'},{c:'600919',n:'江苏银行'},
+  {c:'600926',n:'杭州银行'},{c:'601128',n:'常熟银行'},{c:'002142',n:'宁波银行'},{c:'601628',n:'中国人寿'},
+  {c:'601336',n:'新华保险'},{c:'601319',n:'中国人保'},{c:'601601',n:'中国太保'},{c:'600999',n:'招商证券'},
+  {c:'601211',n:'国泰君安'},{c:'601066',n:'中信建投'},{c:'601688',n:'华泰证券'},{c:'601881',n:'中国银河'},
+  {c:'600918',n:'中泰证券'},{c:'601788',n:'光大证券'},{c:'600570',n:'恒生电子'},{c:'300059',n:'东方财富'},
+  /* —— 沪市主板 · 消费医药 —— */
+  {c:'600276',n:'恒瑞医药'},{c:'600809',n:'山西汾酒'},{c:'600887',n:'伊利股份'},{c:'603288',n:'海天味业'},
+  {c:'600196',n:'复星医药'},{c:'600085',n:'同仁堂'},{c:'600422',n:'昆药集团'},{c:'600521',n:'华海药业'},
+  {c:'603259',n:'药明康德'},{c:'600763',n:'通策医疗'},{c:'600779',n:'水井坊'},{c:'600132',n:'重庆啤酒'},
+  {c:'600702',n:'舍得酒业'},{c:'603369',n:'今世缘'},{c:'603589',n:'口子窑'},{c:'603345',n:'安井食品'},
+  {c:'600298',n:'安琪酵母'},{c:'600690',n:'海尔智家'},{c:'600872',n:'中炬高新'},{c:'600859',n:'王府井'},
+  {c:'600637',n:'东方明珠'},{c:'600839',n:'四川长虹'},
+  /* —— 沪市主板 · 能源资源基建 —— */
+  {c:'601857',n:'中国石油'},{c:'600028',n:'中国石化'},{c:'601899',n:'紫金矿业'},{c:'600900',n:'长江电力'},
+  {c:'601088',n:'中国神华'},{c:'601985',n:'中国核电'},{c:'600795',n:'国电电力'},{c:'600886',n:'国投电力'},
+  {c:'600674',n:'川投能源'},{c:'600011',n:'华能国际'},{c:'601991',n:'大唐发电'},{c:'600362',n:'江西铜业'},
+  {c:'600111',n:'北方稀土'},{c:'603993',n:'洛阳锄业'},{c:'600547',n:'山东黄金'},{c:'600988',n:'赤峰黄金'},
+  {c:'600219',n:'南山铝业'},{c:'600010',n:'包钢股份'},{c:'600019',n:'宝钢股份'},{c:'600663',n:'八一钢铁'},
+  /* —— 沪市主板 · 制造科技 —— */
+  {c:'600104',n:'上汽集团'},{c:'601633',n:'长城汽车'},{c:'601238',n:'广汽集团'},{c:'601127',n:'赛力斯'},
+  {c:'600438',n:'通威股份'},{c:'601012',n:'隆基绿能'},{c:'600585',n:'海螺水泥'},{c:'600031',n:'三一重工'},
+  {c:'601766',n:'中国中车'},{c:'600150',n:'中国船舶'},{c:'601390',n:'中国中铁'},{c:'601668',n:'中国建筑'},
+  {c:'601800',n:'中国交建'},{c:'601186',n:'中国铁建'},{c:'601618',n:'中国中冶'},{c:'601669',n:'中国电建'},
+  {c:'601138',n:'工业富联'},{c:'603501',n:'韦尔股份'},{c:'603986',n:'兆易创新'},{c:'600745',n:'闻泰科技'},
+  {c:'600460',n:'士兰微'},{c:'600703',n:'三安光电'},{c:'600760',n:'中航沈飞'},{c:'600893',n:'航发动力'},
+  {c:'600176',n:'中国巨石'},{c:'603806',n:'福斯特'},{c:'601865',n:'福莱特'},{c:'603606',n:'东方电缆'},
+  {c:'600050',n:'中国联通'},{c:'600941',n:'中国移动'},{c:'601728',n:'中国电信'},{c:'600018',n:'上港集团'},
+  {c:'600009',n:'上海机场'},{c:'601111',n:'中国国航'},{c:'600029',n:'南方航空'},{c:'601006',n:'大秦铁路'},
+  {c:'601816',n:'京沪高铁'},{c:'600487',n:'亨通光电'},{c:'600498',n:'烽火通信'},{c:'600486',n:'扬农化工'},
+  {c:'603260',n:'合盛硅业'},{c:'600989',n:'宝丰能源'},{c:'600096',n:'云天化'},{c:'600141',n:'兴发集团'},
+  {c:'600309',n:'万华化学'},{c:'600346',n:'恒力石化'},
+  /* —— 沪科创板 —— */
+  {c:'688981',n:'中芯国际'},{c:'688599',n:'天合光能'},{c:'688187',n:'时代电气'},{c:'688008',n:'澜起科技'},
+  {c:'688012',n:'中微公司'},{c:'688036',n:'传音控股'},{c:'688169',n:'石头科技'},{c:'688235',n:'百济神州'},
+  {c:'688396',n:'华润微'},{c:'688363',n:'华熙生物'},{c:'688256',n:'寒武纪'},{c:'688271',n:'联影医疗'},
+  {c:'688347',n:'华虹公司'},
+  /* —— 深市主板 —— */
   {c:'000001',n:'平安银行'},{c:'000002',n:'万科A'},{c:'000333',n:'美的集团'},{c:'000651',n:'格力电器'},
   {c:'000858',n:'五粮液'},{c:'000568',n:'泸州老窖'},{c:'000725',n:'京东方A'},{c:'002415',n:'海康威视'},
   {c:'002594',n:'比亚迪'},{c:'002475',n:'立讯精密'},{c:'002714',n:'牧原股份'},{c:'002304',n:'洋河股份'},
   {c:'002371',n:'北方华创'},{c:'002230',n:'科大讯飞'},{c:'002027',n:'分众传媒'},{c:'002352',n:'顺丰控股'},
-  {c:'300750',n:'宁德时代'},{c:'300059',n:'东方财富'},{c:'300760',n:'迈瑞医疗'},{c:'300015',n:'爱尔眼科'},
-  {c:'300122',n:'智飞生物'},{c:'300274',n:'阳光电源'},{c:'300124',n:'汇川技术'},{c:'300308',n:'中际旭创'},
-  {c:'300502',n:'新易盛'},{c:'300033',n:'同花顺'},{c:'300454',n:'深信服'},{c:'002460',n:'赣锋锂业'},
-  {c:'000338',n:'潍柴动力'},{c:'000625',n:'长安汽车'},{c:'000977',n:'浪潮信息'},{c:'002241',n:'歌尔股份'},
-  {c:'000063',n:'中兴通讯'},{c:'000100',n:'TCL科技'},{c:'000157',n:'中联重科'},{c:'002008',n:'大族激光'},
-  {c:'002049',n:'紫光国微'},{c:'300014',n:'亿纬锂能'},{c:'002074',n:'国轩高科'},{c:'300408',n:'三环集团'}
+  {c:'002460',n:'赣锄锂业'},{c:'002466',n:'天齐锂业'},{c:'000338',n:'潍柴动力'},{c:'000625',n:'长安汽车'},
+  {c:'000977',n:'浪潮信息'},{c:'002241',n:'歌尔股份'},{c:'000063',n:'中兴通讯'},{c:'000100',n:'TCL科技'},
+  {c:'000157',n:'中联重科'},{c:'002008',n:'大族激光'},{c:'002049',n:'紫光国微'},{c:'000538',n:'云南白药'},
+  {c:'000596',n:'古井贡酒'},{c:'000799',n:'酒鬼酒'},{c:'000895',n:'双汇发展'},{c:'000983',n:'山西焦煤'},
+  {c:'002493',n:'荣盛石化'},{c:'002648',n:'卫星化学'},{c:'001979',n:'招商蛇口'},{c:'000049',n:'德赛电池'},
+  {c:'002444',n:'巨星科技'},{c:'002507',n:'濣陵榨菜'},{c:'002568',n:'百润股份'},{c:'002812',n:'恩捷股份'},
+  {c:'002821',n:'凯莱英'},{c:'000661',n:'长春高新'},{c:'000963',n:'华东医药'},{c:'000999',n:'华润三九'},
+  {c:'002007',n:'华兰生物'},{c:'002311',n:'海大集团'},{c:'000708',n:'中信特钢'},{c:'000932',n:'华菱钢铁'},
+  {c:'000898',n:'鞍钢股份'},{c:'000550',n:'江铃汽车'},{c:'000876',n:'新希望'},{c:'002405',n:'四维图新'},
+  {c:'002555',n:'三七互娱'},{c:'002726',n:'大豪科技'},
+  /* —— 深创业板 —— */
+  {c:'300750',n:'宁德时代'},{c:'300760',n:'迈瑞医疗'},{c:'300015',n:'爱尔眼科'},{c:'300122',n:'智飞生物'},
+  {c:'300274',n:'阳光电源'},{c:'300124',n:'汇川技术'},{c:'300308',n:'中际旭创'},{c:'300502',n:'新易盛'},
+  {c:'300033',n:'同花顺'},{c:'300454',n:'深信服'},{c:'300014',n:'亿纬锂能'},{c:'300408',n:'三环集团'},
+  {c:'300628',n:'亿联网络'},{c:'300661',n:'圣邦股份'},{c:'300782',n:'卓胜微'},{c:'300347',n:'泰格医药'},
+  {c:'300003',n:'乐普医疗'},{c:'300529',n:'健帆生物'},{c:'300633',n:'科沃斯'},{c:'300896',n:'爱美客'},
+  {c:'300999',n:'金龙鱼'},{c:'300979',n:'华利集团'},{c:'301269',n:'华大九天'},{c:'300413',n:'芒果超媒'},
+  {c:'300433',n:'蓝思科技'},{c:'301235',n:'华宝新能'}
 ];
 const _seen = new Set();
 const POOL_DEFAULT = [];
 RAW_POOL.forEach(p=>{ if(!_seen.has(p.c)){ _seen.add(p.c); POOL_DEFAULT.push(p); } });
 
 /* ============ 本地存储 ============ */
-const KID = { pool:'tk_pool', holds:'tk_holds' };
+const KID = { pool:'tk_pool_v2', holds:'tk_holds' };
 let pool = (function(){ try{ const x=JSON.parse(localStorage.getItem(KID.pool)); return Array.isArray(x)&&x.length? x : POOL_DEFAULT.slice(); }catch(e){ return POOL_DEFAULT.slice(); } })();
 let holdings = (function(){ try{ const x=JSON.parse(localStorage.getItem(KID.holds)); return Array.isArray(x)?x:[]; }catch(e){ return []; } })();
 function savePool(){ localStorage.setItem(KID.pool, JSON.stringify(pool)); }
@@ -215,12 +262,45 @@ function jsonp(url){
 const QUOTE_FIELDS='f2,f3,f4,f5,f6,f7,f8,f10,f12,f14,f15,f16,f17,f18,f20,f23';
 async function fetchQuotes(codes){
   if(!codes.length) return {};
-  const secids=codes.map(secidOf).join(',');
-  const d=await jsonp('https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids='+secids+'&fields='+QUOTE_FIELDS);
-  const diff=d&&d.data&&d.data.diff;
   const map={};
-  if(Array.isArray(diff)) diff.forEach(it=>{ if(it&&it.f12!=null) map[String(it.f12)]=it; });
+  const B=45; // 分批拉取，避免单次请求股票过多被限流
+  for(let i=0;i<codes.length;i+=B){
+    const part=codes.slice(i,i+B);
+    const secids=part.map(secidOf).join(',');
+    try{
+      const d=await jsonp('https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids='+secids+'&fields='+QUOTE_FIELDS);
+      const diff=d&&d.data&&d.data.diff;
+      if(Array.isArray(diff)) diff.forEach(it=>{ if(it&&it.f12!=null) map[String(it.f12)]=it; });
+    }catch(e){}
+    if(i+B<codes.length) await new Promise(r=>setTimeout(r,150));
+  }
   return map;
+}
+/* ---- 全市场（沪深京 A 股）分页列表 ---- */
+const MARKET_FS='m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048';
+async function fetchMarketPage(pn){
+  return jsonp('https://push2.eastmoney.com/api/qt/clist/get?pn='+pn+'&pz=100&po=1&np=1&fltt=2&invt=2&fid=f6&fs='+MARKET_FS+'&fields='+QUOTE_FIELDS);
+}
+async function fetchAllMarket(onProgress){
+  const map={}; let total=0; let failedPages=0;
+  const collect=d=>{ if(d&&d.data&&Array.isArray(d.data.diff)){ if(d.data.total) total=d.data.total; d.data.diff.forEach(it=>{ if(it&&it.f12!=null){ const c=String(it.f12); if(!map[c]) map[c]=it; } }); } };
+  const getPage=async pn=>{ // 单页最多试 3 次，退避重试，尽量避免整页丢失
+    for(let a=0;a<3;a++){
+      try{ const d=await fetchMarketPage(pn); collect(d); return true; }catch(e){}
+      if(a<2) await new Promise(r=>setTimeout(r,1200+a*1400));
+    }
+    failedPages++; return false;
+  };
+  await getPage(1);
+  if(!total) total=5900;
+  if(onProgress) onProgress(Object.keys(map).length,total);
+  const pages=Math.ceil(total/100);
+  for(let pn=2;pn<=pages;pn++){
+    await getPage(pn);
+    if(onProgress&&(pn%6===0||pn===pages)) onProgress(Object.keys(map).length,total);
+    await new Promise(r=>setTimeout(r,200));
+  }
+  return {map,total,failedPages};
 }
 async function fetchKline(code,lmt){
   lmt=lmt||60;
@@ -276,16 +356,45 @@ function trendOf(kl){
   return {add,tags};
 }
 
+/* 扫描模式：market=全市场（默认，覆盖99%+） pool=我的候选池 */
+function getScanMode(){ return localStorage.getItem('tk_scan_mode')||'market'; }
+function setScanMode(m){ localStorage.setItem('tk_scan_mode',m); }
+let scanRunning=false;
 async function runScan(){
-  const st=el('pickStatus'), wrap=el('pickTableWrap');
-  st.textContent='扫描中…'; wrap.innerHTML='<div class="empty">正在拉取行情与 K 线，请稍候…</div>';
+  if(scanRunning) return;
+  scanRunning=true;
+  try{ if(getScanMode()==='pool') await runPoolScan(); else await runMarketScan(); }
+  finally{ scanRunning=false; }
+}
+
+async function runPoolScan(){
+  const st=el('pickStatus');
+  st.textContent='扫描中…';
   let quotes={};
-  try{ quotes=await fetchQuotes(pool.map(p=>p.c)); }catch(e){ st.textContent='行情获取失败'; }
+  try{ quotes=await fetchQuotes(pool.map(p=>p.c)); }catch(e){}
   const items=pool.map(p=>{ const q=quotes[p.c]; return {code:p.c,name:p.n,q:q}; }).filter(x=>x.q);
+  await confirmAndRender(items,'候选池 '+items.length+' 只，展示前 15');
+}
+
+async function runMarketScan(){
+  const st=el('pickStatus'), wrap=el('pickTableWrap');
+  st.textContent='全市场扫描中…';
+  wrap.innerHTML='<div class="empty">正在扫描沪深京全部 A 股（约 5900 只，分 60 页拉取），约需 20 秒，请稍候…</div>';
+  const res=await fetchAllMarket(function(n,t){ st.textContent='全市场扫描中 '+n+' / '+t+' 只…'; });
+  const items=[];
+  Object.keys(res.map).forEach(function(c){ const q=res.map[c]; if(q&&typeof q.f2==='number'&&q.f2>0&&typeof q.f3==='number') items.push({code:c,name:q.f14||c,q:q}); });
+  if(!items.length){ wrap.innerHTML='<div class="empty">全市场行情未取到（接口限流），请稍后点「立即扫描」重试。</div>'; st.textContent=''; return; }
+  const cov=res.total?Math.round(items.length/res.total*1000)/10:100;
+  const warn=res.failedPages>0?'（'+res.failedPages+' 页被限流，可稍后重扫）':'';
+  await confirmAndRender(items,'全市场 '+items.length+'/'+res.total+' 只 · 覆盖率 '+cov+'%'+warn+'，展示前 15');
+}
+
+async function confirmAndRender(items,scopeText){
+  const st=el('pickStatus'), wrap=el('pickTableWrap');
   if(!items.length){ wrap.innerHTML='<div class="empty">暂未取到行情（可能接口限流或网络问题），请稍后重试。</div>'; st.textContent=''; return; }
   items.forEach(it=>{ it.base=scoreOf(it.q); });
   items.sort((a,b)=>b.base-a.base);
-  const tops=items.slice(0,8);
+  const tops=items.slice(0,10);
   // 串行拉取 K 线，避免并发触发免费接口限流
   for(const it of tops){
     try{ it.kl=await fetchKline(it.code,60); const t=trendOf(it.kl); it.tags=t.tags; it.score=Math.round((it.base+t.add)*10)/10; }
@@ -315,7 +424,7 @@ async function runScan(){
   });
   h+='</tbody></table>';
   wrap.innerHTML=h;
-  st.textContent='更新于 '+timeText()+'（扫描 '+items.length+' 只，展示前 15）';
+  st.textContent='更新于 '+timeText()+'（'+scopeText+'）';
 }
 
 /* ============ 我的持仓 ============ */
@@ -444,6 +553,12 @@ function resetPool(){ if(confirm('恢复为默认候选池？')){ pool=POOL_DEFA
 /* ============ 装配 ============ */
 document.querySelectorAll('.tab').forEach(t=>{ t.addEventListener('click',()=>switchTab(t.dataset.view)); });
 el('btnScan').addEventListener('click',runScan);
+(function(){
+  const sel=el('scanMode');
+  if(!sel) return;
+  sel.value=getScanMode();
+  sel.addEventListener('change',function(){ setScanMode(sel.value); schedule(); runScan(); });
+})();
 el('btnHoldRefresh').addEventListener('click',refreshHoldings);
 el('btnAddHold').addEventListener('click',addHolding);
 el('btnPoolAdd').addEventListener('click',addPool);
@@ -525,17 +640,20 @@ let pickTimer=null, holdTimer=null;
 function schedule(){
   clearInterval(pickTimer); clearInterval(holdTimer);
   if(isTradingTime()){
-    pickTimer=setInterval(runScan,60000); holdTimer=setInterval(refreshHoldings,30000);
-    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>交易时段</b>（选股 60s / 持仓 30s 自动刷新）';
+    const pickMs=getScanMode()==='pool'?60000:180000;
+    pickTimer=setInterval(runScan,pickMs); holdTimer=setInterval(refreshHoldings,30000);
+    const lbl=getScanMode()==='pool'?'选股 60s':'全市场扫描 3 分钟';
+    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>交易时段</b>（'+lbl+' / 持仓 30s 自动刷新）';
   }else{
-    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>当前非交易时段</b>（交易时段自动扫描）';
+    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>当前非交易时段</b>（点「立即扫描」可随时手动扫描）';
   }
 }
 setInterval(schedule,60000);
 
 /* 启动 */
 syncSwitches();
-runScan();
+if(getScanMode()==='pool'){ runScan(); }
+else{ el('pickStatus').textContent='已就绪：点「立即扫描」开始全市场扫描（约 20 秒）'; }
 renderPool();
 refreshHoldings();
 schedule();
