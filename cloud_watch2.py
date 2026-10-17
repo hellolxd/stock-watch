@@ -485,6 +485,8 @@ def task_brief(st):
     print("[简报] 邮件%s" % res)
     if "已发送" in res:
         st["brief:%s" % datetime.now(CST).strftime("%Y%m%d")] = time.time()
+        # 返回非空 hits，让 main() 落盘 _state.json（brief:YYYYMMDD 日去重 + state 可追溯）
+        return ["brief"]
     return []
 
 
