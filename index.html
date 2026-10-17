@@ -293,6 +293,7 @@ async function fetchAllMarket(onProgress){
   };
   await getPage(1);
   if(!total) total=5900;
+  if(!Object.keys(map).length) return {map:{},total:0,failedPages:1}; // 第 1 页就取不到：直接失败，避免空转加重限流
   if(onProgress) onProgress(Object.keys(map).length,total);
   const pages=Math.ceil(total/100);
   for(let pn=2;pn<=pages;pn++){
