@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>股票分析 · 智能选股与持仓监控</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1f2630;--line:#2d333b;--tx:#e6edf3;--sub:#8b949e;--red:#f85149;--green:#3fb950;--amber:#d29922;--blue:#58a6ff;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--tx);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding-bottom:40px}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 0;position:sticky;top:0;z-index:10}
+  .header-in{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  h1{font-size:19px;font-weight:700}
+  h1 span{color:var(--blue)}
+  .status{font-size:12px;color:var(--sub)}
+  .status b{color:var(--green);font-weight:600}
+  .tabs{display:flex;gap:6px}
+  .tab{padding:7px 16px;border-radius:8px;cursor:pointer;font-size:14px;color:var(--sub);background:transparent;border:1px solid transparent}
+  .tab.active{background:var(--blue);color:#fff;font-weight:600}
+  .tab:hover:not(.active){border-color:var(--line)}
+  main{margin-top:18px}
+  .view{display:none}.view.active{display:block}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .card h2{font-size:15px;margin-bottom:12px}
+  .card h2 small{font-size:12px;color:var(--sub);font-weight:400}
+  .desc{font-size:13px;color:var(--sub);line-height:1.7;margin-bottom:14px;background:var(--panel2);border-left:3px solid var(--blue);padding:10px 14px;border-radius:6px}
+  .btn{background:var(--blue);color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--sub);font-weight:400}
+  .btn:hover{opacity:.9}
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .hint{font-size:12px;color:var(--sub)}
+  input{background:var(--panel2);border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:7px 10px;font-size:13px}
+  input:focus{outline:none;border-color:var(--blue)}
+  table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+  table.tbl th{text-align:left;padding:10px 12px;font-size:12px;color:var(--sub);font-weight:600;border-bottom:1px solid var(--line);white-space:nowrap}
+  table.tbl td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.tbl tr:hover td{background:var(--panel2)}
+  .up{color:var(--red)} .down{color:var(--green)} .flat{color:var(--sub)}
+  .rank{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;background:var(--panel2)}
+  .r1{background:#d29922;color:#000}.r2{background:#c0c0c0;color:#000}.r3{background:#cd7f32;color:#fff}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;margin:1px 3px 1px 0}
+  .tag.buy{background:rgba(63,185,80,.16);color:var(--green)}
+  .tag.watch{background:rgba(88,166,255,.16);color:var(--blue)}
+  .tag.sell{background:rgba(248,81,73,.16);color:var(--red)}
+  .tag.hold{background:rgba(210,153,34,.16);color:var(--amber)}
+  .score{font-weight:800;font-size:17px}
+  .score small{font-size:10px;color:var(--sub);font-weight:400;display:block}
+  .pl{font-weight:700}
+  .muted{color:var(--sub)}
+  .link{color:var(--blue);cursor:pointer;text-decoration:none;font-size:12px}
+  .link:hover{text-decoration:underline}
+  .empty{text-align:center;color:var(--sub);padding:40px 0;font-size:13px}
+  .form-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .mini-stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .stat{background:var(--panel2);border-radius:8px;padding:10px 12px}
+  .stat .l{font-size:11px;color:var(--sub)}
+  .stat .v{font-size:16px;font-weight:700;margin-top:2px}
+  .foot{text-align:center;color:var(--sub);font-size:11px;margin-top:24px;line-height:1.7}
+  /* 卖出提醒横幅 */
+  .alert-zone{margin:-4px 0 6px}
+  .banner{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;background:var(--panel2);font-size:13px;animation:slide .3s ease}
+  .banner.sell{border-left-color:var(--red);background:rgba(248,81,73,.10)}
+  .banner .b-tag{font-weight:800;color:var(--amber);white-space:nowrap}
+  .banner.sell .b-tag{color:var(--red)}
+  .banner .b-close{cursor:pointer;color:var(--sub);font-size:14px;margin-left:auto;padding:0 2px;user-select:none}
+  .banner .b-close:hover{color:var(--tx)}
+  @keyframes slide{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+  /* 提醒开关 */
+  .switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--sub);background:var(--panel2);border:1px solid var(--line);padding:5px 10px;border-radius:8px;user-select:none}
+  .switch .dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+  .switch.on{color:var(--blue);border-color:var(--blue)}
+  .switch.on .dot{background:var(--blue)}
+  .mini-btn{padding:5px 10px;font-size:12px}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2630;border:1px solid var(--line);border-radius:8px;padding:10px 18px;font-size:13px;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,.4);max-width:90%;animation:slide .3s ease}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap header-in">
+    <h1>股票分析 · <span>智能选股 &amp; 持仓监控</span></h1>
+    <div class="status" id="netStatus">数据源：东方财富免费行情</div>
+    <div class="tabs">
+      <div class="tab active" data-view="pick">智能选股</div>
+      <div class="tab" data-view="holdings">我的持仓</div>
+      <div class="tab" data-view="pool">候选池管理</div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="alertZone" class="alert-zone"></div>
+
+  <!-- 智能选股 -->
+  <section class="view active" id="view-pick">
+    <div class="card">
+      <h2>智能选股 <small>从精选候选池中实时扫描，打分排序出「可买入」标的</small></h2>
+      <div class="desc">按「资金活跃度 + 量价动能 + 趋势强度」对候选池全部股票实时打分，再结合 5/10/20 日均线与 RSI 过滤，筛出当天最值得关注的 Top 标的。仅基于公开行情的技术面参考，不构成投资建议，请结合基本面独立判断。</div>
+      <div class="toolbar">
+        <button class="btn" id="btnScan">立即扫描</button>
+        <span class="hint" id="pickStatus"></span>
+      </div>
+      <div id="pickTableWrap"><div class="empty">点击「立即扫描」开始选股</div></div>
+    </div>
+  </section>
+
+  <!-- 我的持仓 -->
+  <section class="view" id="view-holdings">
+    <div class="card">
+      <h2>我的持仓 <small>监控每只持仓的卖出时机（止盈 / 止损 / 破位 / 超买）</small></h2>
+      <div class="desc">添加你的持仓（代码 + 买入成本 + 数量，数据仅保存在本机浏览器）。系统会实时计算盈亏，并结合均线、RSI、量比给出「卖出 / 减仓 / 持有」建议。所有信号仅作参考，不构成投资建议。</div>
+      <div class="toolbar">
+        <button class="btn" id="btnHoldRefresh">刷新持仓</button>
+        <span class="hint" id="holdStatus"></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="btnExportWatch">导出云端配置</button>
+        <span class="switch" id="swSound"><span class="dot"></span>声音提醒</span>
+        <span class="switch" id="swNotify"><span class="dot"></span>桌面通知</span>
+      </div>
+      <div id="holdTableWrap"><div class="empty">还没有持仓，先添加一笔吧</div></div>
+      <h2 style="margin-top:22px">添加持仓</h2>
+      <div class="form-row">
+        <input id="hCode" placeholder="代码 如 600519" style="width:130px">
+        <input id="hName" placeholder="名称 如 贵州茅台" style="width:140px">
+        <input id="hCost" type="number" placeholder="买入成本价" style="width:120px">
+        <input id="hQty" type="number" placeholder="数量" style="width:90px">
+        <input id="hTake" type="number" placeholder="止盈% 如 15" style="width:110px">
+        <input id="hStop" type="number" placeholder="止损% 如 -8" style="width:110px">
+        <button class="btn" id="btnAddHold">添加</button>
+      </div>
+      <div class="muted">止盈 / 止损可留空（默认：止盈 +20%，止损 -10%）。</div>
+    </div>
+  </section>
+
+  <!-- 候选池管理 -->
+  <section class="view" id="view-pool">
+    <div class="card">
+      <h2>候选池管理 <small>智能选股在此范围内扫描</small></h2>
+      <div class="desc">内置约 60 只各行业龙头 / 活跃股。你可以增删股票来定制扫描范围，代码填 6 位数字即可。</div>
+      <div class="toolbar">
+        <input id="poolAddCode" placeholder="代码 如 000001" style="width:130px">
+        <input id="poolAddName" placeholder="名称 如 平安银行" style="width:140px">
+        <button class="btn" id="btnPoolAdd">加入候选池</button>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="btnPoolReset">恢复默认</button>
+      </div>
+      <div id="poolWrap"></div>
+    </div>
+  </section>
+
+  <div class="foot">
+    数据来源：东方财富免费行情（实时快照 + 日K线）。刷新受免费接口限制，行情有延迟，仅供学习参考。<br>
+    本工具仅基于技术指标自动计算，不构成任何投资建议。股市有风险，入市需谨慎。
+  </div>
+</main>
+
+<script>
+/* ============ 内置候选池（默认） ============ */
+const RAW_POOL = [
+  {c:'600519',n:'贵州茅台'},{c:'601318',n:'中国平安'},{c:'600036',n:'招商银行'},{c:'600030',n:'中信证券'},
+  {c:'601899',n:'紫金矿业'},{c:'600900',n:'长江电力'},{c:'601857',n:'中国石油'},{c:'600028',n:'中国石化'},
+  {c:'601166',n:'兴业银行'},{c:'600276',n:'恒瑞医药'},{c:'600809',n:'山西汾酒'},{c:'600887',n:'伊利股份'},
+  {c:'600690',n:'海尔智家'},{c:'600104',n:'上汽集团'},{c:'600050',n:'中国联通'},{c:'601012',n:'隆基绿能'},
+  {c:'600438',n:'通威股份'},{c:'600585',n:'海螺水泥'},{c:'601088',n:'中国神华'},{c:'601398',n:'工商银行'},
+  {c:'601939',n:'建设银行'},{c:'601288',n:'农业银行'},{c:'601601',n:'中国太保'},{c:'600999',n:'招商证券'},
+  {c:'601211',n:'国泰君安'},{c:'600570',n:'恒生电子'},{c:'603288',n:'海天味业'},{c:'600309',n:'万华化学'},
+  {c:'600346',n:'恒力石化'},{c:'600031',n:'三一重工'},{c:'601766',n:'中国中车'},{c:'600906',n:'中国船舶'},
+  {c:'601390',n:'中国中铁'},{c:'600019',n:'宝钢股份'},{c:'601138',n:'工业富联'},{c:'603501',n:'韦尔股份'},
+  {c:'600941',n:'中国移动'},{c:'601728',n:'中国电信'},
+  {c:'000001',n:'平安银行'},{c:'000002',n:'万科A'},{c:'000333',n:'美的集团'},{c:'000651',n:'格力电器'},
+  {c:'000858',n:'五粮液'},{c:'000568',n:'泸州老窖'},{c:'000725',n:'京东方A'},{c:'002415',n:'海康威视'},
+  {c:'002594',n:'比亚迪'},{c:'002475',n:'立讯精密'},{c:'002714',n:'牧原股份'},{c:'002304',n:'洋河股份'},
+  {c:'002371',n:'北方华创'},{c:'002230',n:'科大讯飞'},{c:'002027',n:'分众传媒'},{c:'002352',n:'顺丰控股'},
+  {c:'300750',n:'宁德时代'},{c:'300059',n:'东方财富'},{c:'300760',n:'迈瑞医疗'},{c:'300015',n:'爱尔眼科'},
+  {c:'300122',n:'智飞生物'},{c:'300274',n:'阳光电源'},{c:'300124',n:'汇川技术'},{c:'300308',n:'中际旭创'},
+  {c:'300502',n:'新易盛'},{c:'300033',n:'同花顺'},{c:'300454',n:'深信服'},{c:'002460',n:'赣锋锂业'},
+  {c:'000338',n:'潍柴动力'},{c:'000625',n:'长安汽车'},{c:'000977',n:'浪潮信息'},{c:'002241',n:'歌尔股份'},
+  {c:'000063',n:'中兴通讯'},{c:'000100',n:'TCL科技'},{c:'000157',n:'中联重科'},{c:'002008',n:'大族激光'},
+  {c:'002049',n:'紫光国微'},{c:'300014',n:'亿纬锂能'},{c:'002074',n:'国轩高科'},{c:'300408',n:'三环集团'}
+];
+const _seen = new Set();
+const POOL_DEFAULT = [];
+RAW_POOL.forEach(p=>{ if(!_seen.has(p.c)){ _seen.add(p.c); POOL_DEFAULT.push(p); } });
+
+/* ============ 本地存储 ============ */
+const KID = { pool:'tk_pool', holds:'tk_holds' };
+let pool = (function(){ try{ const x=JSON.parse(localStorage.getItem(KID.pool)); return Array.isArray(x)&&x.length? x : POOL_DEFAULT.slice(); }catch(e){ return POOL_DEFAULT.slice(); } })();
+let holdings = (function(){ try{ const x=JSON.parse(localStorage.getItem(KID.holds)); return Array.isArray(x)?x:[]; }catch(e){ return []; } })();
+function savePool(){ localStorage.setItem(KID.pool, JSON.stringify(pool)); }
+function saveHolds(){ localStorage.setItem(KID.holds, JSON.stringify(holdings)); }
+
+/* ============ 工具 ============ */
+function el(id){ return document.getElementById(id); }
+function secidOf(code){ return (code.charAt(0)==='6'?'1.':'0.')+code; }
+function fp(v){ return (v==null||isNaN(v))?'-':Number(v).toFixed(2); }
+function f1(v){ return (v==null||isNaN(v))?'-':Number(v).toFixed(2); }
+function pf(v){ if(v==null||isNaN(v))return '-'; return (v>0?'+':'')+Number(v).toFixed(2)+'%'; }
+function money(v){ if(v==null||isNaN(v)||v<=0)return '-'; const y=v/1e8; return y>=1? y.toFixed(2)+'亿' : Math.round(v/1e4)+'万'; }
+function numFmt(v){ if(v==null||isNaN(v))return '-'; return v>=1e8?(v/1e8).toFixed(2)+'亿':v>=1e4?(v/1e4).toFixed(0)+'万':String(v); }
+
+/* ============ 行情数据层（JSONP） ============ */
+function jsonp(url){
+  return new Promise((res,rej)=>{
+    const cb='__tk'+Math.floor(Math.random()*1e6);
+    window[cb]=function(d){ delete window[cb]; s.remove(); res(d); };
+    const s=document.createElement('script');
+    s.src=url+'&cb='+cb;
+    s.onerror=function(){ delete window[cb]; s.remove(); rej(new Error('network')); };
+    document.body.appendChild(s);
+    setTimeout(()=>{ if(window[cb]){ delete window[cb]; s.remove(); rej(new Error('timeout')); } }, 12000);
+  });
+}
+const QUOTE_FIELDS='f2,f3,f4,f5,f6,f7,f8,f10,f12,f14,f15,f16,f17,f18,f20,f23';
+async function fetchQuotes(codes){
+  if(!codes.length) return {};
+  const secids=codes.map(secidOf).join(',');
+  const d=await jsonp('https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids='+secids+'&fields='+QUOTE_FIELDS);
+  const diff=d&&d.data&&d.data.diff;
+  const map={};
+  if(Array.isArray(diff)) diff.forEach(it=>{ if(it&&it.f12!=null) map[String(it.f12)]=it; });
+  return map;
+}
+async function fetchKline(code,lmt){
+  lmt=lmt||60;
+  // 免费接口偶发空响应/限流，最多重试 3 次
+  for(let att=0; att<3; att++){
+    try{
+      const d=await jsonp('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secidOf(code)+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58&klt=101&fqt=1&end=20500101&lmt='+lmt);
+      const kls=d&&d.data&&d.data.klines;
+      if(Array.isArray(kls)&&kls.length) return kls.map(k=>{ const p=k.split(','); return {date:p[0],o:+p[2],c:+p[3],h:+p[4],l:+p[5],v:+p[6],a:+p[7]}; });
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,250*(att+1)));
+  }
+  return [];
+}
+function maOf(closes,n){ if(closes.length<n)return null; let s=0; for(let i=closes.length-n;i<closes.length;i++)s+=closes[i]; return s/n; }
+function rsiOf(closes,n){ n=n||14; if(closes.length<n+1)return null; let u=0,d=0; for(let i=closes.length-n;i<closes.length;i++){ const x=closes[i]-closes[i-1]; if(x>0)u+=x; else d-=x; } if(d===0)return 100; return 100-100/(1+u/d); }
+function volRatioOf(kl){ if(!kl||kl.length<6)return null; const cur=kl[kl.length-1].v; let s=0; for(let i=kl.length-6;i<kl.length-1;i++)s+=kl[i].v; const avg=s/5; return avg>0?cur/avg:null; }
+
+/* ============ 交易时段 ============ */
+function isTradingTime(){
+  const now=new Date(); const day=now.getDay(); if(day===0||day===6)return false;
+  const m=now.getHours()*60+now.getMinutes();
+  return (m>=570&&m<=690)||(m>=780&&m<=900);
+}
+function timeText(){ const n=new Date(); const p=x=>x<10?'0'+x:x; return n.getHours()+':'+p(n.getMinutes()); }
+
+/* ============ 智能选股 ============ */
+function scoreOf(q){
+  let s=50;
+  const zf=q.f3!=null?q.f3:0;
+  if(zf>0&&zf<=7) s+=zf*2.5; else if(zf>7) s+=8; else s+=zf*1.2;
+  const lb=q.f10!=null?q.f10:1;
+  if(lb>=1&&lb<=3) s+=8; else if(lb>0&&lb<1) s+=2;
+  const hs=q.f8!=null?q.f8:0;
+  if(hs>=2&&hs<=10) s+=6; else if(hs>10) s+=2;
+  const amt=q.f6!=null?q.f6:0; if(amt>0) s+=Math.min(12,Math.max(0,Math.log10(amt+1)-7));
+  return Math.round(s*10)/10;
+}
+function trendOf(kl){
+  if(!kl||kl.length<20) return {add:0,tags:[]};
+  const closes=kl.map(k=>k.c); const tags=[]; let add=0;
+  const ma5=maOf(closes,5),ma10=maOf(closes,10),ma20=maOf(closes,20); const cur=closes[closes.length-1];
+  if(ma5&&ma10&&ma20){
+    if(ma5>ma10&&ma10>ma20&&cur>ma5){add+=8;tags.push('均线多头');}
+    else if(ma5>ma10&&ma10>ma20){add+=5;}
+    else if(cur>ma20){add+=3;}
+    else{add-=5;tags.push('趋势偏弱');}
+  }
+  const r=rsiOf(closes);
+  if(r!=null){ if(r>=60&&r<78){add+=4;tags.push('RSI强势');} else if(r>=78){add-=4;tags.push('RSI超买');} else if(r<=35){add+=2;tags.push('超卖反弹');} }
+  const vr=volRatioOf(kl);
+  if(vr!=null&&vr>1.6)add+=3;
+  return {add,tags};
+}
+
+async function runScan(){
+  const st=el('pickStatus'), wrap=el('pickTableWrap');
+  st.textContent='扫描中…'; wrap.innerHTML='<div class="empty">正在拉取行情与 K 线，请稍候…</div>';
+  let quotes={};
+  try{ quotes=await fetchQuotes(pool.map(p=>p.c)); }catch(e){ st.textContent='行情获取失败'; }
+  const items=pool.map(p=>{ const q=quotes[p.c]; return {code:p.c,name:p.n,q:q}; }).filter(x=>x.q);
+  if(!items.length){ wrap.innerHTML='<div class="empty">暂未取到行情（可能接口限流或网络问题），请稍后重试。</div>'; st.textContent=''; return; }
+  items.forEach(it=>{ it.base=scoreOf(it.q); });
+  items.sort((a,b)=>b.base-a.base);
+  const tops=items.slice(0,8);
+  // 串行拉取 K 线，避免并发触发免费接口限流
+  for(const it of tops){
+    try{ it.kl=await fetchKline(it.code,60); const t=trendOf(it.kl); it.tags=t.tags; it.score=Math.round((it.base+t.add)*10)/10; }
+    catch(e){ it.tags=[]; it.score=it.base; }
+  }
+  items.forEach(it=>{ if(it.score==null)it.score=it.base; });
+  items.sort((a,b)=>b.score-a.score);
+  let h='<table class="tbl"><thead><tr><th style="width:40px">名次</th><th>股票</th><th>现价</th><th>涨跌幅</th><th>量比</th><th>换手</th><th>成交额</th><th>综合分</th><th>状态</th><th style="width:74px">操作</th></tr></thead><tbody>';
+  items.slice(0,15).forEach((it,i)=>{
+    const z=it.q.f3>=0?'up':'down';
+    const rkCls=i<3?'rank r'+(i+1):'rank';
+    const tag=i<3?'<span class="tag buy">建议关注 · 可买入</span>':'<span class="tag watch">可跟踪</span>';
+    const tags=(it.tags||[]).map(t=>'<span class="tag hold">'+t+'</span>').join('');
+    const scCls=it.score>=75?'up':it.score>=60?'flat':'down';
+    h+='<tr>'
+      +'<td><span class="'+rkCls+'">'+(i+1)+'</span></td>'
+      +'<td><b>'+it.name+'</b><div class="muted">'+it.code+'</div></td>'
+      +'<td class="'+z+'">'+fp(it.q.f2)+'</td>'
+      +'<td class="'+z+'">'+pf(it.q.f3)+'</td>'
+      +'<td>'+f1(it.q.f10)+'</td>'
+      +'<td>'+f1(it.q.f8)+'%</td>'
+      +'<td>'+money(it.q.f6)+'</td>'
+      +'<td class="score '+scCls+'">'+it.score+'<small>分</small></td>'
+      +'<td>'+tag+tags+'</td>'
+      +'<td><button class="btn mini-btn" onclick="buyStock(\''+it.code+'\',\''+it.name+'\','+it.q.f2+')">买入监测</button></td>'
+      +'</tr>';
+  });
+  h+='</tbody></table>';
+  wrap.innerHTML=h;
+  st.textContent='更新于 '+timeText()+'（扫描 '+items.length+' 只，展示前 15）';
+}
+
+/* ============ 我的持仓 ============ */
+function analyzeSignal(h,q,kl,closes,cur,pnl){
+  const take=(h.take!=null&&h.take!=='')?+h.take:20;
+  const stop=(h.stop!=null&&h.stop!=='')?+h.stop:-10;
+  const ma5=maOf(closes,5),ma10=maOf(closes,10),ma20=maOf(closes,20);
+  const r=rsiOf(closes); const vr=volRatioOf(kl);
+  let tag='持有', color='hold', reasons=[];
+  const fall2 = closes.length>=2 && closes[closes.length-1]<closes[closes.length-2];
+  if(pnl<=stop){ tag='止损卖出'; color='sell'; reasons.push('已跌破止损线 '+stop+'%'); }
+  else if(pnl>=take){ tag='止盈卖出'; color='sell'; reasons.push('已达止盈目标 +'+take+'%'); }
+  else if(ma20!=null&&cur<ma20&&fall2){ tag='破位减仓'; color='sell'; reasons.push('跌破20日线且重心下移，趋势走弱'); }
+  else if(r!=null&&r>80&&(vr==null||vr>1.5)){ tag='超买减仓'; color='sell'; reasons.push('RSI '+Math.round(r)+' 超买，逢高减仓'); }
+  else if(ma10!=null&&cur<ma10&&fall2){ tag='弱势减仓'; color='sell'; reasons.push('跌破10日线且重心下移'); }
+  else if(r!=null&&r<55){ tag='持有观望'; color='hold'; reasons.push('RSI '+r.toFixed(0)+' 偏弱，等待企稳'); }
+  else { tag='持有'; color='hold'; reasons.push('趋势健康，继续持有'); }
+  if(ma20!=null)reasons.push('MA20='+fp(ma20));
+  if(ma10!=null)reasons.push('MA10='+fp(ma10));
+  return {tag,color,reasons};
+}
+async function refreshHoldings(){
+  const st=el('holdStatus'), wrap=el('holdTableWrap');
+  if(!holdings.length){ wrap.innerHTML='<div class="empty">还没有持仓，先添加一只吧。</div>'; st.textContent=''; return; }
+  st.textContent='更新中…';
+  let quotes={};
+  try{ quotes=await fetchQuotes(holdings.map(h=>h.code)); }catch(e){ st.textContent='行情获取失败'; }
+  const enriched=await Promise.all(holdings.map(async(h,idx)=>{
+    const q=quotes[h.code];
+    if(!q) return {...h,missing:true};
+    let kl=[]; try{ kl=await fetchKline(h.code,60); }catch(e){}
+    const closes=kl.map(k=>k.c);
+    const cur=q.f2; const cost=h.cost||0;
+    const pnl=cost>0?(cur-cost)/cost*100:0;
+    const sig=analyzeSignal(h,q,kl,closes,cur,pnl);
+    return {...h,q,kl,cur,pnl,chg:q.f3,sig};
+  }));
+  renderHoldings(enriched);
+  enriched.forEach(it=>alertSell(it));
+  st.textContent='更新于 '+timeText();
+}
+function renderHoldings(list){
+  const wrap=el('holdTableWrap');
+  let totCost=0,totVal=0;
+  list.forEach(it=>{ if(!it.missing){ totCost+=it.cost*it.qty; totVal+=it.cur*it.qty; } });
+  const totPnl=totCost>0?(totVal-totCost)/totCost*100:0;
+  let h='<div class="mini-stat">'
+    +'<div class="stat"><div class="l">总市值</div><div class="v">'+fp(totVal)+'</div></div>'
+    +'<div class="stat"><div class="l">持仓成本</div><div class="v">'+fp(totCost)+'</div></div>'
+    +'<div class="stat"><div class="l">累计盈亏</div><div class="v '+(totPnl>=0?'up':'down')+'">'+(totPnl>=0?'+':'')+totPnl.toFixed(2)+'%</div></div>'
+    +'</div>';
+  h+='<table class="tbl"><thead><tr><th>股票</th><th>现价</th><th>涨跌幅</th><th>累计盈亏</th><th>持仓/成本</th><th>卖出建议</th><th style="width:60px">操作</th></tr></thead><tbody>';
+  list.forEach((it,i)=>{
+    if(it.missing){
+      h+='<tr><td><b>'+it.name+'</b><div class="muted">'+it.code+'</div></td><td colspan="5" class="muted">未取到行情，请检查代码</td><td><span class="link" onclick="delHold('+i+')">删除</span></td></tr>';
+      return;
+    }
+    const c=it.chg>=0?'up':'down'; const pc=it.pnl>=0?'up':'down';
+    h+='<tr>'
+      +'<td><b>'+it.name+'</b><div class="muted">'+it.code+'</div></td>'
+      +'<td class="'+c+'">'+fp(it.cur)+'</td>'
+      +'<td class="'+c+'">'+pf(it.chg)+'</td>'
+      +'<td class="pl '+pc+'">'+(it.pnl>=0?'+':'')+it.pnl.toFixed(2)+'%</td>'
+      +'<td class="muted">'+numFmt(it.qty)+'股 / '+fp(it.cost)+'</td>'
+      +'<td><span class="tag '+it.sig.color+'">'+it.sig.tag+'</span><div class="muted" style="font-size:11px">'+it.sig.reasons.join(' · ')+'</div></td>'
+      +'<td><span class="link" onclick="delHold('+i+')">删除</span></td>'
+      +'</tr>';
+  });
+  h+='</tbody></table>';
+  wrap.innerHTML=h;
+}
+function addHolding(){
+  const code=el('hCode').value.trim();
+  const name=el('hName').value.trim();
+  const cost=parseFloat(el('hCost').value);
+  const qty=parseFloat(el('hQty').value);
+  const take=el('hTake').value, stop=el('hStop').value;
+  if(!/^\d{6}$/.test(code)){ alert('请填写 6 位股票代码'); return; }
+  if(!name){ alert('请填写股票名称'); return; }
+  if(!(cost>0)){ alert('请填写买入成本价'); return; }
+  if(!(qty>0)){ alert('请填写持有数量'); return; }
+  if(holdings.find(h=>h.code===code)){ alert('该股票已在持仓中，如需修改请先删除再添加'); return; }
+  holdings.push({code,name,cost,qty,take:take===''?null:+take,stop:stop===''?null:+stop});
+  saveHolds(); refreshHoldings();
+  ['hCode','hName','hCost','hQty','hTake','hStop'].forEach(id=>el(id).value='');
+}
+function delHold(i){ holdings.splice(i,1); saveHolds(); refreshHoldings(); }
+
+/* ============ 候选池 ============ */
+function renderPool(){
+  let h='<table class="tbl"><thead><tr><th style="width:110px">代码</th><th>名称</th><th style="width:70px">操作</th></tr></thead><tbody>';
+  pool.forEach((p,i)=>{
+    h+='<tr><td class="muted">'+p.c+'</td><td><b>'+p.n+'</b></td><td><span class="link" onclick="delPool('+i+')">移除</span></td></tr>';
+  });
+  h+='</tbody></table>';
+  el('poolWrap').innerHTML=h;
+}
+function addPool(){
+  const c=el('poolAddCode').value.trim(), n=el('poolAddName').value.trim();
+  if(!/^\d{6}$/.test(c)){ alert('代码需为 6 位数字'); return; }
+  if(pool.find(p=>p.c===c)){ alert('已在候选池中'); return; }
+  pool.push({c:c,n:n||c}); savePool(); renderPool();
+  el('poolAddCode').value=''; el('poolAddName').value='';
+}
+function delPool(i){ pool.splice(i,1); savePool(); renderPool(); }
+function resetPool(){ if(confirm('恢复为默认候选池？')){ pool=POOL_DEFAULT.slice(); savePool(); renderPool(); } }
+
+/* ============ 装配 ============ */
+document.querySelectorAll('.tab').forEach(t=>{ t.addEventListener('click',()=>switchTab(t.dataset.view)); });
+el('btnScan').addEventListener('click',runScan);
+el('btnHoldRefresh').addEventListener('click',refreshHoldings);
+el('btnAddHold').addEventListener('click',addHolding);
+el('btnPoolAdd').addEventListener('click',addPool);
+
+/* ============ 导出云端监测配置 ============ */
+function exportWatchlist(){
+  if(!holdings.length){ toast('暂无持仓，无需导出'); return; }
+  const arr=holdings.map(h=>({code:h.code,name:h.name,cost:+h.cost,qty:+h.qty,take:h.take!=null?+h.take:null,stop:h.stop!=null?+h.stop:null}));
+  const text=JSON.stringify(arr,null,2);
+  if(navigator.clipboard&&window.isSecureContext){ navigator.clipboard.writeText(text).then(()=>toast('已复制云端监测配置，请粘贴到仓库 watchlist.json')).catch(()=>fallbackCopy(text)); }
+  else fallbackCopy(text);
+}
+function fallbackCopy(text){
+  const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); toast('已复制云端监测配置，请粘贴到仓库 watchlist.json'); }catch(e){ prompt('复制失败，请手动复制：', text); }
+  ta.remove();
+}
+el('btnExportWatch').addEventListener('click',exportWatchlist);
+
+/* ============ 卖出实时提醒 + 一键买入监测 ============ */
+const SET={soundOn:localStorage.getItem('tk_sound')!=='0',notify:localStorage.getItem('tk_notify')!=='0'};
+let audioCtx=null;
+function beep(){
+  try{
+    audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    const t=audioCtx.currentTime;
+    [0,0.22,0.44].forEach(off=>{
+      const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+      o.type='sine'; o.frequency.value=880; o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.0001,t+off); g.gain.exponentialRampToValueAtTime(0.3,t+off+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+off+0.18);
+      o.start(t+off); o.stop(t+off+0.2);
+    });
+  }catch(e){}
+}
+function requestNotifyPermission(){ try{ if(window.Notification&&Notification.permission==='default')Notification.requestPermission(); }catch(e){} }
+function setSound(v){ SET.soundOn=v; localStorage.setItem('tk_sound',v?'1':'0'); syncSwitches(); }
+function setNotify(v){ SET.notify=v; localStorage.setItem('tk_notify',v?'1':'0'); if(v)requestNotifyPermission(); syncSwitches(); }
+function syncSwitches(){ const a=el('swSound'),b=el('swNotify'); if(a)a.classList.toggle('on',SET.soundOn); if(b)b.classList.toggle('on',SET.notify); }
+el('swSound').addEventListener('click',()=>setSound(!SET.soundOn));
+el('swNotify').addEventListener('click',()=>setNotify(!SET.notify));
+function toast(msg){ const t=document.createElement('div'); t.className='toast'; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),2600); }
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  const tab=document.querySelector('.tab[data-view="'+name+'"]'); if(tab)tab.classList.add('active');
+  const v=el('view-'+name); if(v)v.classList.add('active');
+  if(name==='holdings')refreshHoldings();
+  if(name==='pool')renderPool();
+}
+function buyStock(code,name,price){
+  if(holdings.find(h=>h.code===code)){ toast(name+' 已在监测中'); switchTab('holdings'); return; }
+  const qty=prompt('买入「'+name+'」，成本=当前价 '+fp(price)+'，请输入买入数量（股）：','100');
+  const q=parseFloat(qty); if(!(q>0)){ return; }
+  holdings.push({code,name,cost:price,qty:q,take:null,stop:null});
+  saveHolds(); requestNotifyPermission(); switchTab('holdings'); refreshHoldings();
+  toast('已买入并加入实时卖出监测：'+name+' '+q+'股 @ '+fp(price));
+}
+const alertLog={};
+function alertSell(it){
+  if(it.missing||!it.sig||it.sig.color!=='sell')return;
+  const key=it.code+':'+it.sig.tag; const now=Date.now();
+  if(alertLog[key]&&now-alertLog[key]<5*60*1000)return;
+  alertLog[key]=now;
+  const zone=el('alertZone');
+  const div=document.createElement('div');
+  div.className='banner '+(it.sig.tag.indexOf('止损')>=0||it.sig.tag.indexOf('止盈')>=0?'sell':'caution');
+  div.innerHTML='<span class="b-tag">'+it.sig.tag+'</span><span> <b>'+it.name+'</b>（'+it.code+'）现价 '+fp(it.cur)+'，盈亏 '+(it.pnl>=0?'+':'')+it.pnl.toFixed(2)+'% · '+it.sig.reasons.join(' · ')+'</span><span class="b-close" onclick="this.parentNode.remove()">✕</span>';
+  zone.prepend(div);
+  while(zone.children.length>3)zone.removeChild(zone.lastChild);
+  if(SET.soundOn)beep();
+  if(SET.notify&&window.Notification&&Notification.permission==='granted'){ try{ new Notification(it.name+' · '+it.sig.tag,{body:'现价 '+fp(it.cur)+'，盈亏 '+(it.pnl>=0?'+':'')+it.pnl.toFixed(2)+'% · '+it.sig.reasons.join('，')}); }catch(e){} }
+}
+
+/* 重置候选池监听 */
+el('btnPoolReset').addEventListener('click',resetPool);
+
+/* 定时刷新 + 时段校准 */
+let pickTimer=null, holdTimer=null;
+function schedule(){
+  clearInterval(pickTimer); clearInterval(holdTimer);
+  if(isTradingTime()){
+    pickTimer=setInterval(runScan,60000); holdTimer=setInterval(refreshHoldings,30000);
+    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>交易时段</b>（选股 60s / 持仓 30s 自动刷新）';
+  }else{
+    el('netStatus').innerHTML='数据源：东方财富免费行情 · <b>当前非交易时段</b>（交易时段自动扫描）';
+  }
+}
+setInterval(schedule,60000);
+
+/* 启动 */
+syncSwitches();
+runScan();
+renderPool();
+refreshHoldings();
+schedule();
+</script>
+</body>
+</html>
