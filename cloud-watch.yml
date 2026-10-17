@@ -1,0 +1,57 @@
+name: stock-watch-all
+
+# 三个定时入口（均为北京时间）：
+#   9:10  盘前简报（Top5 + 隔夜新闻邮件）          UTC 1:10
+#   开盘时段 9:30-10:29 每 10 分钟买点/卖出监测     UTC 1:30-2:29
+#   盘中其余 10:30-15:00 每 30 分钟                UTC 2:30-7:00
+# GitHub schedule 按行匹配执行 cloud_watch2.py 的对应 --task
+on:
+  schedule:
+    - cron: '10 1 * * 1-5'              # 北京 9:10 盘前简报
+    - cron: '30-59/10 1 * * 1-5'        # 北京 9:30-9:59 开盘密集
+    - cron: '0 2-7 * * 1-5'             # 北京 10:00-15:00 每30分钟
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 盘前简报（9:10）：Top5 + 新闻
+      - name: 盘前简报
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python cloud_watch2.py --task brief --dry-run
+
+      # 开盘时段（9:30-10:29 每 10 分钟）：买点优先 + 卖出兜底
+      - name: 开盘买点监测
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python cloud_watch2.py --task buy
+
+      # 盘中（10:30 后每 30 分钟）：卖出为主
+      - name: 盘中卖出监测
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python cloud_watch2.py --task sell
+
+      - name: 回写去重状态
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add _state.json
+          git diff --cached --quiet || (git commit -m "update watch state" && git push)
