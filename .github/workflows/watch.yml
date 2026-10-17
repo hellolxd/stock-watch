@@ -1,9 +1,37 @@
-name: cloud-watch
+name: stock-watch-all
 
+# 定时入口（北京时间）：
+#   9:10  盘前简报（Top5 + 隔夜新闻邮件）            UTC 1:10
+#   9:30-9:59 每 10 分钟（开盘密集：买点+卖出）       UTC 1:30-1:59
+#   10:00-15:30 每 30 分钟（盘中：卖出为主）          UTC 2:00-7:30
+#
+# 重要说明：GitHub Actions 的每条 cron 触发时都会执行本 workflow 的全部
+# step（无法只执行"某条 cron 对应的步骤"）。因此各 step 内部按"北京时间
+# 窗口"自行判断执行还是跳过：
+#   简报 brief：9:05-9:29（对 9:10 定时延迟的容忍；9:30 后不再补发，避免重复）
+#   买点 buy  ：9:25-10:29（开盘密集时段）
+#   卖出 sell ：9:25-15:45（全交易时段兜底 + 15:30 收盘确认）
+# 同一信号 24 小时只提醒一次（脚本 _state.json 去重，见 cloud_watch2.py）。
+# workflow_dispatch 支持手动指定 task：auto/brief/buy/sell/all（all=全跑，
+# 忽略时间窗口，用于联调验证）。
 on:
   schedule:
-    - cron: '*/30 1-7 * * 1-5'
-  workflow_dispatch: {}
+    - cron: '10 1 * * 1-5'           # 北京 9:10 盘前简报
+    - cron: '30-59/10 1 * * 1-5'     # 北京 9:30-9:59 开盘密集
+    - cron: '0,30 2-7 * * 1-5'       # 北京 10:00-15:30 每 30 分钟
+  workflow_dispatch:
+    inputs:
+      task:
+        description: '手动执行哪个任务（auto=按北京时间窗口判断）'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - brief
+          - buy
+          - sell
+          - all
 
 permissions:
   contents: write
@@ -13,15 +41,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: 运行云端监测
+
+      # ---- 盘前简报（北京 9:05-9:29 或手动 brief/all）----
+      - name: 盘前简报
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python cloud_watch.py --config watchlist.json --state _state.json
+        run: |
+          TS=$(TZ=Asia/Shanghai date +%H%M)
+          M="${{ github.event.inputs.task }}"; M="${M:-auto}"
+          DO=0
+          if [ "$M" = "all" ] || [ "$M" = "brief" ]; then DO=1
+          elif [ "$M" = "auto" ] && [ "$TS" -ge 905 ] && [ "$TS" -le 929 ]; then DO=1
+          fi
+          if [ "$DO" = "1" ]; then
+            python cloud_watch2.py --task brief
+          else
+            echo "[skip] 简报（北京时间 $TS，模式 $M）"
+          fi
+
+      # ---- 开盘买点（北京 9:25-10:29 或手动 buy/all）----
+      - name: 开盘买点监测
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          TS=$(TZ=Asia/Shanghai date +%H%M)
+          M="${{ github.event.inputs.task }}"; M="${M:-auto}"
+          DO=0
+          if [ "$M" = "all" ] || [ "$M" = "buy" ]; then DO=1
+          elif [ "$M" = "auto" ] && [ "$TS" -ge 925 ] && [ "$TS" -le 1029 ]; then DO=1
+          fi
+          if [ "$DO" = "1" ]; then
+            python cloud_watch2.py --task buy
+          else
+            echo "[skip] 买点（北京时间 $TS，模式 $M）"
+          fi
+
+      # ---- 持仓卖出（北京 9:25-15:45 或手动 sell/all）----
+      - name: 持仓卖出监测
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          TS=$(TZ=Asia/Shanghai date +%H%M)
+          M="${{ github.event.inputs.task }}"; M="${M:-auto}"
+          DO=0
+          if [ "$M" = "all" ] || [ "$M" = "sell" ]; then DO=1
+          elif [ "$M" = "auto" ] && [ "$TS" -ge 925 ] && [ "$TS" -le 1545 ]; then DO=1
+          fi
+          if [ "$DO" = "1" ]; then
+            python cloud_watch2.py --task sell
+          else
+            echo "[skip] 卖出（北京时间 $TS，模式 $M）"
+          fi
+
       - name: 回写去重状态
         run: |
           git config user.name "github-actions[bot]"
