@@ -168,6 +168,17 @@ def batch_quotes(codes):
                     "f8": float(f[38]) if f[38] else 0.0,
                     "f6": (float(f[37]) if f[37] else 0.0) * 1e4,
                 }
+                _q = out_all[m.group(1)]
+                # 多因子附加（2026-10-18）：五档委比 + 昨高昨低
+                try:
+                    bidV = sum(float(f[9 + k*2 + 1]) or 0 for k in range(5))
+                    askV = sum(float(f[19 + k*2 + 1]) or 0 for k in range(5))
+                    _q["weibi"] = int(round((bidV - askV) / (bidV + askV) * 100)) if (bidV + askV) > 0 else 0
+                except Exception:
+                    _q["weibi"] = 0
+                if len(f) > 43:
+                    _q["yhi"] = float(f[41]) if f[41] else 0.0
+                    _q["ylo"] = float(f[42]) if f[42] else 0.0
         except Exception:
             continue
         time.sleep(0.12)
@@ -305,6 +316,80 @@ def buy_point(q, kl):
     return None
 
 
+# ---------------- 多因子背景（2026-10-18 与网页同步升级） ----------------
+def index_context():
+    """上证/创业板涨跌% → dict；失败返回 None"""
+    try:
+        q = "sh000001,sz399006"
+        req = urllib.request.Request("https://qt.gtimg.cn/q=" + q, headers={
+            "User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            txt = r.read().decode("gbk", "ignore")
+        def idx(sym):
+            m = re.search(r'v_' + sym + '="([^"]*)"', txt)
+            if not m:
+                return None
+            f = m.group(1).split("~")
+            return {"chg": float(f[32]) or 0.0, "price": float(f[3]) or 0.0}
+        sh, cy = idx("sh000001"), idx("sz399006")
+        if not sh or not cy:
+            return None
+        return {"sh": sh, "cyb": cy}
+    except Exception:
+        return None
+
+
+def money_flow(sym):
+    """新浪 MoneyFlow：主力/大单/中单/小单净流入（元）；失败返回 None
+    （不复用 _get：需本站 Referer，且 _get 强制按东财 JSON 处理）"""
+    try:
+        url = ("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+               "MoneyFlow.ssi_ssfx_flzjtj?daima=" + sym)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Referer": "https://finance.sina.com.cn/"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read().decode("utf-8", "ignore")
+        fixed = re.sub(r"'(\w+)':", r'"\1":', raw)
+        j = json.loads(fixed)
+        if not j or j.get("netamount") is None:
+            return None
+        return {
+            "net_main": float(j.get("netamount") or 0),
+            "main_ratio": float(j.get("r0x_ratio") or 0),
+            "big_in": float(j.get("r0_in") or 0),
+            "big_out": float(j.get("r0_out") or 0),
+        }
+    except Exception:
+        return None
+
+
+def multi_factor_text(q):
+    """组装多因子附加行（大盘/主力/委比）；任一项失败则该项降级为“未获取”"""
+    sym = ("sh" if q.get("f12", "")[0] in "65" else "sz") + q.get("f12", "")
+    out = []
+    ic = index_context()
+    if ic:
+        sh_t = "%+.2f%%" % ic["sh"]["chg"]
+        cy_t = "%+.2f%%" % ic["cyb"]["chg"]
+        out.append("大盘：上证 %s / 创业板 %s" % (sh_t, cy_t))
+    else:
+        out.append("大盘：未获取")
+    mf = money_flow(sym)
+    if mf:
+        yi = mf["net_main"] / 1e8
+        t = "%+.2f亿" % yi if abs(yi) >= 1 else "%+d万" % int(yi * 1e4)
+        out.append("主力净流入 %s（ 占比%.0f%%）" % (t, mf["main_ratio"]))
+    else:
+        out.append("主力资金：未获取")
+    wb = q.get("weibi")
+    if wb is not None:
+        out.append("委比 %+d%%" % wb)
+    else:
+        out.append("盘口委比：未获取")
+    return "；".join(out)
+
+
 def sell_analyze(h, q, kl):
     """镜像 v1 analyze（卖出信号） → (tag, pnl, reasons)"""
     cost = float(h.get("cost") or 0)
@@ -433,12 +518,13 @@ def task_buy(st):
             print("[去重] %s %s" % (name, bp))
             continue
         title = "买入提醒：%s %s（%s）" % (name, bp, datetime.now(CST).strftime("%m-%d %H:%M"))
+        extra = "\n—— 多因子参考：" + multi_factor_text(q)
         body = ("%s（%s）出现「%s」买点\n"
-                "现价 %s   涨幅 %s%%   量比 %s\n"
+                "现价 %s   涨幅 %s%%   量比 %s%s\n"
                 "提示：开盘时段每 10 分钟自动检测一次；同一买点 24 小时只提醒一次。\n"
                 "—— 技术面参考，不构成投资建议" %
-                (name, code, bp, q.get("f2") or kl[-1]["c"] if kl else "-",
-                 q.get("f3") or 0, q.get("f10") or 1))
+                (name, code, bp, q.get("f2") or (kl[-1]["c"] if kl else "-"),
+                 q.get("f3") or 0, q.get("f10") or 1, extra))
         res = send_mail(title, body)
         print("[买入] %s %s → %s" % (name, bp, res))
         if "已发送" in res:

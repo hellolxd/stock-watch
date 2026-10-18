@@ -382,14 +382,51 @@ async function fetchQuotesTencent(codes){
         const f=(mm[2]||'').split('~'); const code=mm[1];
         const price=parseFloat(f[3]), prev=parseFloat(f[4]);
         if(!(price>0)) return;
+        // f[9..18]=买一~买五(价/量交替)，f[19..28]=卖一~卖五；f[41]/f[42]=昨高/昨低；f[43]=振幅
+        let bidV=0,askV=0;
+        for(let k=0;k<5;k++){ bidV+=parseFloat(f[9+k*2+1])||0; askV+=parseFloat(f[19+k*2+1])||0; }
         map[code]={ f12:code, f14:f[1], f2:price, f3:prev>0?Math.round((price-prev)/prev*10000)/100:0,
                     f10:(f[49]!=null&&f[49]!==''?(parseFloat(f[49])||0):0), f8:parseFloat(f[38])||0,
-                    f6:(parseFloat(f[37])||0)*1e4 };
+                    f6:(parseFloat(f[37])||0)*1e4,
+                    bidVol:bidV, askVol:askV, weibi:(bidV+askV>0?Math.round((bidV-askV)/(bidV+askV)*100):0),
+                    yhi:(parseFloat(f[41])||0), ylo:(parseFloat(f[42])||0), zhenfu:(parseFloat(f[43])||0) };
       });
     }catch(e){}
     if(i+B<codes.length) await new Promise(r=>setTimeout(r,120));
   }
   return map;
+}
+/* 大盘指数背景（上证/深成/创业板，同一腾讯接口） */
+async function fetchIndexContext(){
+  const out={ok:false,sh:{},sz:{},cyb:{}};
+  try{
+    const r=await fetch('https://qt.gtimg.cn/q=sh000001,sz399001,sz399006',{cache:'no-store'});
+    const t=new TextDecoder('gbk').decode(await r.arrayBuffer());
+    const m=t.match(/v_sh000001="([^"]*)"/); if(m){ const f=m[1].split('~'); out.sh={name:'上证指数',chg:parseFloat(f[32])||0,price:parseFloat(f[3])||0}; }
+    const m2=t.match(/v_sz399001="([^"]*)"/); if(m2){ const f=m2[1].split('~'); out.sz={name:'深证成指',chg:parseFloat(f[32])||0,price:parseFloat(f[3])||0}; }
+    const m3=t.match(/v_sz399006="([^"]*)"/); if(m3){ const f=m3[1].split('~'); out.cyb={name:'创业板指',chg:parseFloat(f[32])||0,price:parseFloat(f[3])||0}; }
+    out.ok=!!(m&&m2&&m3);
+  }catch(e){ out.ok=false; }
+  return out;
+}
+/* 主力资金流（新浪 MoneyFlow：大单r0/中单r1/小单r2 区间流入流出，单位元） */
+async function fetchMoneyFlow(sym){
+  const out={ok:false};
+  try{
+    const url='https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssi_ssfx_flzjtj?daima='+sym;
+    const r=await fetch(url,{cache:'no-store'});
+    const t=await r.text();
+    const j=JSON.parse(t.replace(/'(\w+)':/g,'"$1":'));
+    if(j && j.netamount!=null){
+      out.bigIn=parseFloat(j.r0_in)||0; out.bigOut=parseFloat(j.r0_out)||0;
+      out.bigNet=parseFloat(j.r0)||0;           // 大单净额（元）
+      out.netMain=parseFloat(j.netamount)||0;    // 主力净流入（元）
+      out.mainRatio=parseFloat(j.r0x_ratio)||0; // 主力占比
+      out.midNet=parseFloat(j.r1)||0; out.miniNet=parseFloat(j.r2)||0;
+      out.ok=true;
+    }
+  }catch(e){ out.ok=false; }
+  return out;
 }
 const QUOTE_FIELDS='f2,f3,f4,f5,f6,f7,f8,f10,f12,f14,f15,f16,f17,f18,f20,f23';
 async function fetchQuotes(codes){
@@ -723,7 +760,7 @@ async function liveRefreshPick(first){
   }
 }
 
-/* ============ 买入时间窗预测（规则模型） ============ */
+/* ============ 买入时间窗预测（多因子 v2：大盘/主力/委比/价格） ============ */
 function vwapOfDay(mins){
   if(!mins||!mins.length) return null;
   var lastDay=String(mins[mins.length-1].date||'').slice(0,8);
@@ -738,8 +775,64 @@ function vwapOfDay(mins){
   if(!vv||!pv) return null;
   return {day:lastDay, vwap:pv/vv, high:(hi===-Infinity?null:hi), low:(lo===Infinity?null:lo)};
 }
-function buyWindowForecast(q,d){
+/* 大盘分 → 0~100（同时看上证与创业板） */
+function marketScore(idx){
+  if(!idx||!idx.ok) return null;
+  var sh=idx.sh.chg, cy=(idx.cyb&&idx.cyb.chg)||0;
+  var avg=(sh+cy)/2;
+  // 大盘涨跌映射：≥+1% →95，+0.5~1%→85，0~0.5%→70，-0.5~0→45，-1~-0.5%→30，≤-1%→10
+  if(avg>=1) return 95; if(avg>=0.5) return 85; if(avg>=0.15) return 70;
+  if(avg>=0) return 55; if(avg>=-0.5) return 45; if(avg>=-1) return 30;
+  return 10;
+}
+function marketText(idx){
+  if(!idx||!idx.ok) return '大盘数据获取失败';
+  var shTxt=(idx.sh.chg>=0?'+':'')+idx.sh.chg.toFixed(2)+'%';
+  var shCls=idx.sh.chg>=0?'r':'g';
+  return '<b class="'+shCls+'">'+idx.sh.name+' '+shTxt+'</b>'+(idx.cyb?('/ 创业板 <b class="'+(idx.cyb.chg>=0?'r':'g')+'">'+((idx.cyb.chg>=0?'+':'')+idx.cyb.chg.toFixed(2)+'%')+'</b>'):'');
+}
+/* 主力资金 → 0~100 + 文本 */
+function moneyScore(mf){
+  if(!mf||!mf.ok) return null;
+  var netYi=(mf.netMain||0)/1e8;
+  var ratio=(mf.mainRatio||0);
+  if(ratio>=70) return 90;
+  if(ratio>=50) return 78;
+  if(ratio>=30) return 62;
+  if(ratio>=10) return 52;
+  if(ratio>-10) return 42;
+  if(ratio>-30) return 30;
+  if(ratio>-50) return 18;
+  return 8;
+}
+function moneyText(mf){
+  if(!mf||!mf.ok) return '主力资金：浏览器端受限（云端邮件含此项）';
+  var netYi=(mf.netMain||0)/1e8;
+  var s=netYi>=0?'+':''; var t=(netYi>=1||netYi<=-1)?(s+netYi.toFixed(2)+'亿'):((s+(netYi*1e4).toFixed(0))+'万');
+  return '主力净流入 <b class="'+(netYi>=0?'r':'g')+'">'+t+'</b>（ 占比'+Math.round(mf.mainRatio||0)+'%）';
+}
+/* 委比→0~100 */
+function weibiScore(q){
+  if(!q||q.weibi==null) return null;
+  var w=q.weibi;
+  if(w>=30) return 88; if(w>=10) return 70; if(w>=-10) return 50; if(w>=-30) return 32; return 12;
+}
+function buyWindowForecast(q,d,idx,mf){
   var cur=(q&&q.f2)||0, chg=(q&&q.f3)||0, lb=(q&&q.f10)||1, dayTxt=kmDateTxt(d.day);
+  var mS=marketScore(idx), mT=marketText(idx);
+  var zS=moneyScore(mf), zT=moneyText(mf);
+  var wS=weibiScore(q);
+  // 综合分：按“可得因子”加权，权重自动重归一。≥2 个因子即启用多因子模式，否则退回单因子VWAP规则。
+  // 注：浏览器端新浪资金流受CORS限制常缺席（云端邮件侧可用），缺失时权重变为大盘50%·委比30%·价格20%。
+  var blended=null, priceS=null;
+  {
+    priceS=( cur>d.vwap*1.005? 78 : (cur<d.vwap*0.995? 30 : 55) );
+    var fs=[[mS,0.40],[zS,0.30],[wS,0.20],[priceS,0.10]].filter(function(x){return x[0]!=null;});
+    if(fs.length>=2){
+      var sw=0,sv=0; fs.forEach(function(x){ sw+=x[1]; sv+=x[0]*x[1]; });
+      blended=Math.round(sv/sw);
+    }
+  }
   var state,wins,advice,ref,stop;
   if(chg>=5){
     state='<b class="r">已大涨 '+pf(chg)+'，追高风险大</b>';
@@ -747,56 +840,87 @@ function buyWindowForecast(q,d){
     advice='今日不建议追买；若 14:30 后仍强于大盘，可尾盘超小仓试探，其余等待回踩。';
     ref='参考位：5日线附近（今日不追）；VWAP≈'.concat(fp(d.vwap));
     stop=('跌破 VWAP×0.99（≈'+fp(d.vwap*0.99)+'）放弃，等回踩5日线再评估');
+    if(blended!=null){
+      if(blended>=75){ wins[2].n='尾盘小仓（大盘与资金配合）'; wins[2].lv=3; advice='虽已大涨，但多因子分 '+blended+'（大盘/主力/委比配合）——若 14:30 后仍强于大盘，可尾盘小仓，严格设止损。'; }
+      else if(blended<=35){ advice='已大涨且多因子分仅 '+blended+'（大盘/主力/委比转弱）——今日不接飞刀，等回踩再评估。'; }
+    }
   } else if(chg<=-3){
     state='<b class="g">明显走弱 '+pf(chg)+'</b>';
     wins=[{t:'09:45-10:10',n:'仅观察',lv:1},{t:'13:30-14:00',n:'放量收复VWAP才看',lv:2},{t:'14:30-14:55',n:'尾盘定夺',lv:1}];
     advice='今日以观望为主；除非午后放量收复日内均价(VWAP≈'+fp(d.vwap)+')，否则等下个交易日。';
     ref='参考位：VWAP ≈'+fp(d.vwap)+'，收复其上0.3%才考虑';
-    stop='当日弱势，不满足条件即不买入';
+    stop='当日弱势，不满足条件即不买';
+    if(zS!=null&&zT&&zS>=78){ wins[1].n='主力逆势吸筹·可看'; wins[1].lv=3; }
+    if(zS!=null&&zS<=30){ advice='今日以观望为主；主力也在流出（占比低），等下个交易日。'; }
   } else if(cur>d.vwap*1.005){
     state='强势：现价在日内均价上方 '+(((cur/d.vwap)-1)*100).toFixed(2)+'%';
-    wins=[{t:'09:45-10:10',n:'回踩VWAP低吸·首选',lv:3},{t:'13:30-14:00',n:'午后二次低吸',lv:2},{t:'14:30-14:55',n:'尾盘未回踩则小仓',lv:1}];
+    wins=[{t:'09:45-10:10',n:'回踩VWAP低吸',lv:3},{t:'13:30-14:00',n:'午后二次低吸',lv:2},{t:'14:30-14:55',n:'尾盘未回踩则小仓',lv:1}];
     advice='回调至 VWAP（≈'+fp(d.vwap)+'）企稳是今日性价比最好的介入点；若全天不给回踩，尾盘 14:30 后小仓。';
     ref='参考买价：VWAP ± 0.3%（≈'+fp(d.vwap*0.997)+' ~ '+fp(d.vwap*1.003)+'）';
     stop='跌破 VWAP×0.99（≈'+fp(d.vwap*0.99)+'）转观望';
+    if(blended!=null){
+      if(blended>=80){ wins[0].n='回踩VWAP低吸·多因子强·首选'; wins[0].lv=3; advice='多因子分 '+blended+'：大盘与资金共振，回踩 VWAP 是今日最佳介入点，仓位可稍放心。'; }
+      else if(blended<=45){ wins[0].n='回踩观望（多因子弱）'; wins[0].lv=1; wins[0].t='09:45-10:10'; advice='多因子分仅 '+blended+'（可用因子偏弱）：回踩也别急接，缩仓或放弃，看午后。'; }
+    }
   } else if(cur<d.vwap*0.995){
     state='偏弱：现价在日内均价下方 '+((1-cur/d.vwap)*100).toFixed(2)+'%';
     wins=[{t:'09:45-10:10',n:'不建议',lv:0},{t:'13:30-14:00',n:'放量收复VWAP跟进',lv:3},{t:'14:30-14:55',n:'尾盘定夺',lv:2}];
     advice='等午后放量收复 VWAP（≈'+fp(d.vwap)+'）再介入；早盘惯性下探不接。';
     ref='参考买价：VWAP 上方 0.3%（≈'+fp(d.vwap*1.003)+'）触发';
     stop='再度跌回 VWAP 下方则离场等次日';
+    if(blended!=null&&blended>=80){ wins[1].n='收复VWAP跟进·多因子强·首选'; advice='多因子分 '+blended+'：大盘与资金都强，早盘下探属于正常回踩，收复 VWAP 后可直接跟进。'; }
   } else {
     state='贴近日内均价，多空平衡';
     wins=[{t:'09:45-10:30',n:'方向确认',lv:3},{t:'13:30-14:00',n:'午后顺势',lv:2},{t:'14:30-14:55',n:'尾盘定夺',lv:1}];
-    advice='价格贴 VWAP（≈'+fp(d.vwap)+'）；上午看能否放量站上去，站上后回踩不破可介入。';
+    advice='价格贴 VWAP（≈'+fp(d.vwap)+'）；上午能否放量站上去，站上后回踩不破可介入。';
     ref='参考买价：站上 VWAP 后回踩不破（≈'+fp(d.vwap)+'）';
     stop='站不上 VWAP 保持观望';
+    if(blended!=null){
+      if(blended>=80){ advice='多因子分 '+blended+'：共振向好，上午站上放量时是介入点。'; }
+      else if(blended<=40){ advice='多因子分 '+blended+'：共振偏弱，贴VWAP时宁可错过，等午后或次日。'; }
+    }
   }
-  return {dayTxt:dayTxt,state:wins?state:state,wins:wins,advice:advice,ref:ref,stop:stop,
-          cur:cur,chg:chg,lb:lb,vwap:d.vwap,hi:d.high,lo:d.low};
+  return {dayTxt:dayTxt,state:state,wins:wins,advice:advice,ref:ref,stop:stop,
+          cur:cur,chg:chg,lb:lb,vwap:d.vwap,hi:d.high,lo:d.low,
+          blended:blended,marketTxt:mT,moneyTxt:zT,weibi:(q&&q.weibi!=null?q.weibi:null),
+          yhi:(q&&q.yhi)||null,ylo:(q&&q.ylo)||null};
 }
 async function renderForecast(code,name){
   var fcEl=el('kmForecast'); if(!fcEl) return;
-  // 不设 loading 态（静默加载，避免闪烁）
-  var q=null,mins=null;
-  try{ var m=await fetchQuotesTencent([code]); q=m&&m[code]; }catch(e){}
-  try{ mins=await fetchKline(code,600,'m5'); }catch(e){ mins=null; }
+  var sym=(code[0]==='6'||code[0]==='5')?'sh'+code:'sz'+code;
+  var q=null,mins=null,idx=null,mf=null;
+  var ps=[];
+  ps.push(fetchQuotesTencent([code]).then(function(m){ q=m&&m[code]; }).catch(function(){}));
+  ps.push(fetchKline(code,600,'m5').then(function(m){ mins=m; }).catch(function(){ mins=null; }));
+  ps.push(fetchIndexContext().then(function(x){ idx=x; }).catch(function(){}));
+  ps.push(fetchMoneyFlow(sym).then(function(x){ mf=x; }).catch(function(){}));
+  await Promise.all(ps);
   var d=(mins&&mins.length)?vwapOfDay(mins):null;
   if(!q||!d){ fcEl.style.display='none'; return; }
-  var f=buyWindowForecast(q,d);
+  var f=buyWindowForecast(q,d,idx,mf);
   if(!f){ fcEl.style.display='none'; return; }
   var pills=f.wins.filter(function(w){return w&&w.t&&w.t!=='——';}).map(function(w){
     return '<span class="fw-w'+(w.lv>=3?' on':'')+'">'+w.t+' '+w.n+(w.lv>=3?' · 首选':'')+'</span>';
   }).join('');
-  var rows=f.wins||[];
-  fcEl.innerHTML='<div class="fw-h">⏱ 买入时间窗预测 · '+f.dayTxt+' <em>（规则模型，非精确预言）</em></div>'
+  var multi='';
+  if(f.blended!=null){
+    multi='<div>多因子分 <b>'+f.blended+'</b>（按可得因子加权：大盘40%·主力30%·委比20%·价格10%，缺失项自动重归一）</div>';
+  }
+  var ctx=[];
+  if(f.marketTxt) ctx.push(f.marketTxt);
+  if(f.moneyTxt) ctx.push(f.moneyTxt);
+  if(f.weibi!=null) ctx.push('委比 '+(f.weibi>=0?'+':'')+f.weibi+'%');
+  if(ctx.length) multi+='<div>'+ctx.join('　｜　')+'</div>';
+  var yhTxt=(f.yhi?('<span class="fw-w">昨高 '+fp(f.yhi)+' / 昨低 '+fp(f.ylo)+'</span>'):'');
+  fcEl.innerHTML='<div class="fw-h">⏱ 买入时间窗预测（多因子）· '+f.dayTxt+' <em>（规则模型，非精确预言）</em></div>'
     +'<div>现价 <b class="'+(f.chg>=0?'r':'g')+'">'+fp(f.cur)+'（'+pf(f.chg)+'）</b> · 量比 '+f1(f.lb)
     +' · 日内均价(VWAP) <b>'+fp(f.vwap)+'</b> · 日内区间 '+fp(f.lo)+' ~ '+fp(f.hi)+'</div>'
+    +(multi||'')
     +'<div>状态：'+f.state+'</div>'
-    +'<div>时间窗：'+pills+'</div>'
+    +'<div>时间窗：'+pills+(yhTxt?' '+yhTxt:'')+'</div>'
     +'<div>策略：'+f.advice+'</div>'
     +'<div>'+f.ref+' ｜ '+f.stop+'</div>'
-    +'<div class="fw-disc">规则基于日内均价(VWAP)与常见交易节奏生成，仅供参考，不构成投资建议。</div>';
+    +'<div class="fw-disc">多因子=上证与创业板背景（40%）+主力大单资金（30%）+五档委比（20%）+价格位置（10%）；缺数据时自动降级为单因子VWAP规则。数据：腾讯行情/新浪资金流。仅供参考，不构成投资建议。</div>';
   fcEl.style.display='block';
 }
 
