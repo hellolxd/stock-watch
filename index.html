@@ -134,7 +134,7 @@
 <header>
   <div class="wrap header-in">
     <h1>股票分析 · <span>智能选股 &amp; 持仓监控</span></h1>
-    <div class="status" id="netStatus">数据源：腾讯实时行情</div>
+    <div class="status" id="netStatus"></div>
     <div class="tabs">
       <div class="tab active" data-view="pick">智能选股</div>
       <div class="tab" data-view="holdings">我的持仓</div>
@@ -223,7 +223,7 @@
   </section>
 
   <div class="foot">
-    数据来源：腾讯免费行情（实时快照 + 多周期K线，行情列交易时段约每10秒刷新）。免费接口有延迟，仅供学习参考，不构成投资建议。<br>
+    行情列每 5 秒自动校准。免费接口有延迟，仅供学习参考，不构成投资建议。<br>
     本工具仅基于技术指标自动计算，不构成任何投资建议。股市有风险，入市需谨慎。
   </div>
 </main>
@@ -699,7 +699,7 @@ async function confirmAndRender(items,scopeText){
   }
   items.forEach(it=>{ if(it.score==null)it.score=it.base; });
   items.sort((a,b)=>b.score-a.score);
-  let h='<table class="tbl"><thead><tr><th style="width:40px">名次</th><th>股票</th><th>现价<span class="live-dot" title="交易时段每10秒刷新"></span></th><th>涨跌幅</th><th>量比</th><th>换手</th><th>成交额</th><th>综合分</th><th>状态</th><th style="width:74px">操作</th></tr></thead><tbody>';
+  let h='<table class="tbl"><thead><tr><th style="width:40px">名次</th><th>股票</th><th>现价<span class="live-dot" title="每5秒刷新"></span></th><th>涨跌幅</th><th>量比</th><th>换手</th><th>成交额</th><th>综合分</th><th>状态</th><th style="width:74px">操作</th></tr></thead><tbody>';
   var show=items.slice(0,15);
   PICK.rows=show.map(x=>({code:x.code}));
   show.forEach((it,i)=>{
@@ -756,7 +756,7 @@ async function liveRefreshPick(first){
   });
   if(n){
     var st=el('pickStatus');
-    if(st){ st.innerHTML='<span class="live-dot"></span>实时更新 '+timeText()+'（行情列每10秒 · '+(isTradingTime()?'交易中':'非交易时段·最近收盘快照')+'）'; }
+    if(st){ st.innerHTML='<span class="live-dot"></span>实时更新 '+timeText()+'（行情列每5秒 · '+(isTradingTime()?'交易中':'非交易时段·最近收盘快照')+'）'; }
   }
 }
 
@@ -920,7 +920,7 @@ async function renderForecast(code,name){
     +'<div>时间窗：'+pills+(yhTxt?' '+yhTxt:'')+'</div>'
     +'<div>策略：'+f.advice+'</div>'
     +'<div>'+f.ref+' ｜ '+f.stop+'</div>'
-    +'<div class="fw-disc">多因子=上证与创业板背景（40%）+主力大单资金（30%）+五档委比（20%）+价格位置（10%）；缺数据时自动降级为单因子VWAP规则。数据：腾讯行情/新浪资金流。仅供参考，不构成投资建议。</div>';
+    +'<div class="fw-disc">多因子=上证与创业板背景（40%）+主力大单资金（30%）+五档委比（20%）+价格位置（10%）；缺数据时自动降级为单因子VWAP规则。仅供参考，不构成投资建议。</div>';
   fcEl.style.display='block';
 }
 
@@ -1474,12 +1474,12 @@ function schedule(){
   if(isTradingTime()){
     const pickMs=getScanMode()==='pool'?60000:180000;
     pickTimer=setInterval(runScan,pickMs); holdTimer=setInterval(refreshHoldings,30000);
-    liveTimer=setInterval(function(){liveRefreshPick(false);},10000);
+    liveTimer=setInterval(function(){liveRefreshPick(false);},5000);
     const lbl=getScanMode()==='pool'?'选股 60s 重扫':'全市场 3 分钟重扫';
-    el('netStatus').innerHTML='数据源：腾讯实时行情 · <b>交易时段</b>（'+lbl+' / 行情列 10s / 持仓 30s）';
+    el('netStatus').innerHTML='<b>交易时段</b>（'+lbl+' · 行情列每5秒 · 持仓 30s）';
   }else{
-    liveTimer=setInterval(function(){liveRefreshPick(false);},30000);
-    el('netStatus').innerHTML='数据源：腾讯实时行情 · <b>当前非交易时段</b>（行情列为最近快照，每30秒校准；点「立即扫描」可全量重扫）';
+    liveTimer=setInterval(function(){liveRefreshPick(false);},5000);
+    el('netStatus').innerHTML='<b>非交易时段</b>（行情列为最近快照，每5秒校准；点「立即扫描」可全量重扫）';
   }
 }
 setInterval(schedule,60000);
