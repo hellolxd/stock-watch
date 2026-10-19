@@ -694,70 +694,103 @@ async function confirmAndRender(items,scopeText){
   const tops=items.slice(0,10);
   // 串行拉取 K 线，避免并发触发免费接口限流
   for(const it of tops){
-    try{ it.kl=await fetchKline(it.code,60); const t=trendOf(it.kl); it.tags=t.tags; it.score=Math.round((it.base+t.add)*10)/10; }
-    catch(e){ it.tags=[]; it.score=it.base; }
+    try{ it.kl=await fetchKline(it.code,60); const t=trendOf(it.kl); it.tags=t.tags; it.trend=t.add; it.score=Math.round((it.base+t.add)*10)/10; }
+    catch(e){ it.tags=[]; it.trend=0; it.score=it.base; }
   }
-  items.forEach(it=>{ if(it.score==null)it.score=it.base; });
+  items.forEach(it=>{ if(it.score==null){ it.score=it.base; it.trend=0; } });
   items.sort((a,b)=>b.score-a.score);
+  const show=items.slice(0,15);
+  PICK.rows=show.map(x=>({code:x.code,name:x.name,q:x.q,base:x.base,trend:x.trend||0,tags:x.tags||[],score:x.score,kl:x.kl||null}));
+  PICK.scopeText=scopeText;
+  renderPickRows(PICK.rows,scopeText,'更新于 '+timeText()+'（'+scopeText+'）');
+  savePickSnapshot();
+  // 买点提醒（前三名，30 分钟去重）
+  PICK.rows.slice(0,3).forEach(function(it){ if(it.kl){ const bp=buyPointOf(it.q,it.kl); if(bp) alertBuy(it.name,it.code,bp,it.q); } });
+  liveRefreshPick(true);
+}
+
+/* 渲染选股表格（含前三名/买点标签；提醒由调用方统一触发） */
+function renderPickRows(rows,scope,status){
+  const wrap=el('pickTableWrap'); if(!wrap) return;
   let h='<table class="tbl"><thead><tr><th style="width:40px">名次</th><th>股票</th><th>现价<span class="live-dot" title="每5秒刷新"></span></th><th>涨跌幅</th><th>量比</th><th>换手</th><th>成交额</th><th>综合分</th><th>状态</th><th style="width:74px">操作</th></tr></thead><tbody>';
-  var show=items.slice(0,15);
-  PICK.rows=show.map(x=>({code:x.code}));
-  show.forEach((it,i)=>{
-    const z=it.q.f3>=0?'up':'down';
+  rows.forEach((it,i)=>{
+    const q=it.q||{};
+    const z=(q.f3||0)>=0?'up':'down';
     const rkCls=i<3?'rank r'+(i+1):'rank';
     const tag=i<3?'<span class="tag buy">建议关注 · 可买入</span>':'<span class="tag watch">可跟踪</span>';
     const fwTag=i<3?'<span class="tag buy" style="cursor:pointer" title="点击查看买入时间窗预测" onclick="openKline(\''+it.code+'\',\''+it.name+'\',\'day\')">⏱ 时间窗</span>':'';
     const tags=(it.tags||[]).map(t=>'<span class="tag hold">'+t+'</span>').join('');
     let bp=null;
-    if(i<3&&it.kl&&buyPointOf(it.q,it.kl)) bp=buyPointOf(it.q,it.kl); if(bp) alertBuy(it.name,it.code,bp,it.q);
+    if(i<3&&it.kl) bp=buyPointOf(q,it.kl);
     const bpTag=bp?('<span class="tag buy">买点 · '+bp+'</span>'):'';
     const scCls=it.score>=75?'up':it.score>=60?'flat':'down';
     h+='<tr data-code="'+it.code+'">'
       +'<td><span class="'+rkCls+'">'+(i+1)+'</span></td>'
       +'<td><a class="stocklink" onclick="openKline(\''+it.code+'\',\''+it.name+'\',\'day\')"><b>'+it.name+'</b></a><div class="muted">'+it.code+'</div></td>'
-      +'<td class="'+z+'" data-live="price">'+fp(it.q.f2)+'</td>'
-      +'<td class="'+z+'" data-live="chg">'+pf(it.q.f3)+'</td>'
-      +'<td data-live="lb">'+f1(it.q.f10)+'</td>'
-      +'<td data-live="hs">'+f1(it.q.f8)+'%</td>'
-      +'<td data-live="amt">'+money(it.q.f6)+'</td>'
+      +'<td class="'+z+'" data-live="price">'+fp(q.f2)+'</td>'
+      +'<td class="'+z+'" data-live="chg">'+pf(q.f3)+'</td>'
+      +'<td data-live="lb">'+f1(q.f10)+'</td>'
+      +'<td data-live="hs">'+f1(q.f8)+'%</td>'
+      +'<td data-live="amt">'+money(q.f6)+'</td>'
       +'<td class="score '+scCls+'">'+it.score+'<small>分</small></td>'
       +'<td>'+tag+bpTag+fwTag+tags+'</td>'
-      +'<td><button class="btn mini-btn" onclick="buyStock(\''+it.code+'\',\''+it.name+'\','+it.q.f2+')">买入监测</button></td>'
+      +'<td><button class="btn mini-btn" onclick="buyStock(\''+it.code+'\',\''+it.name+'\','+q.f2+')">买入监测</button></td>'
       +'</tr>';
   });
   h+='</tbody></table>';
   wrap.innerHTML=h;
-  st.textContent='更新于 '+timeText()+'（'+scopeText+'）';
-  liveRefreshPick(true);
+  const st=el('pickStatus'); if(st) st.textContent=status||('更新于 '+timeText()+'（'+scope+'）');
 }
 
-/* ============ 实时列刷新（轻量：仅行情五列，不重算名次） ============ */
-var PICK={rows:[]};
+/* 快照持久化：刷新后自动恢复上次扫描结果 */
+function savePickSnapshot(){
+  try{
+    localStorage.setItem('tk_pick_snapshot',JSON.stringify({
+      ts:Date.now(), mode:getScanMode(), scopeText:PICK.scopeText||'',
+      rows:PICK.rows.map(it=>({code:it.code,name:it.name,q:it.q,base:it.base,trend:it.trend||0,tags:it.tags||[],score:it.score,kl:it.kl||null}))
+    }));
+  }catch(e){}
+}
+function restorePickSnapshot(){
+  try{
+    const raw=localStorage.getItem('tk_pick_snapshot'); if(!raw) return false;
+    const snap=JSON.parse(raw);
+    if(!snap||!Array.isArray(snap.rows)||!snap.rows.length) return false;
+    PICK.rows=snap.rows; PICK.scopeText=snap.scopeText||'上次扫描结果';
+    const t=new Date(snap.ts||Date.now());
+    const hh=(t.getHours()<10?'0':'')+t.getHours(), mm=(t.getMinutes()<10?'0':'')+t.getMinutes();
+    renderPickRows(PICK.rows,PICK.scopeText,'已恢复上次扫描结果（'+hh+':'+mm+'）· 行情每5秒校准');
+    liveRefreshPick(true);
+    return true;
+  }catch(e){ return false; }
+}
+
+/* ============ 实时列刷新（行情+综合分实时重算+按分重排名次） ============ */
+var PICK={rows:[],scopeText:''};
 var liveTimer=null;
 async function liveRefreshPick(first){
   if(!PICK.rows.length) return;
-  if(!first&&document.hidden) return; // 页面不可见时暂停，节约免费接口
+  if(!first&&document.hidden) return; // 页面隐藏时暂停，节约免费接口
   var codes=PICK.rows.map(function(r){return r.code;});
   var fresh=null;
   try{ fresh=await fetchQuotesTencent(codes); }catch(e){}
   if(!fresh||!Object.keys(fresh).length) return;
-  var n=0;
-  codes.forEach(function(c){
-    var q=fresh[c]; if(!q) return;
-    var tr=document.querySelector('tr[data-code="'+c+'"]');
-    if(!tr) return; n++;
-    function setTd(f,val,cls){ var td=tr.querySelector('td[data-live="'+f+'"]'); if(!td) return; td.textContent=val; if(cls) td.className=cls; }
-    var z=(q.f3>=0)?'up':'down';
-    setTd('price',fp(q.f2),z);
-    setTd('chg',pf(q.f3),z);
-    setTd('lb',f1(q.f10));
-    setTd('hs',f1(q.f8)+'%');
-    setTd('amt',money(q.f6));
+  var changed=false;
+  PICK.rows.forEach(function(it){
+    var q=fresh[it.code]; if(!q) return;
+    it.q=q;
+    it.base=scoreOf(q);
+    it.score=Math.round((it.base+(it.trend||0))*10)/10;
+    changed=true;
   });
-  if(n){
-    var st=el('pickStatus');
-    if(st){ st.innerHTML='<span class="live-dot"></span>实时更新 '+timeText()+'（行情列每5秒 · '+(isTradingTime()?'交易中':'非交易时段·最近收盘快照')+'）'; }
-  }
+  if(!changed) return;
+  // 按最新综合分实时重排
+  PICK.rows.sort(function(a,b){ return (b.score||0)-(a.score||0); });
+  renderPickRows(PICK.rows,PICK.scopeText,'<span class="live-dot"></span>实时更新 '+timeText()+'（行情每5秒 · 名次随综合分变化 · '+(isTradingTime()?'交易中':'非交易时段·最近收盘快照')+'）');
+  // 前三名买点提醒（30 分钟去重）
+  PICK.rows.slice(0,3).forEach(function(it){
+    if(it.kl){ const bp=buyPointOf(it.q,it.kl); if(bp) alertBuy(it.name,it.code,bp,it.q); }
+  });
 }
 
 /* ============ 买入时间窗预测（多因子 v2：大盘/主力/委比/价格） ============ */
@@ -1251,8 +1284,9 @@ function enterApp(){
   startApp();
 }
 function startApp(){
+  const restored=restorePickSnapshot(); // 刷新后自动恢复上次扫描结果
   if(getScanMode()==='pool'){ runScan(); }
-  else{ el('pickStatus').textContent='已就绪：点「立即扫描」开始全市场扫描（约 20 秒）'; }
+  else if(!restored){ el('pickStatus').textContent='已就绪：点「立即扫描」开始全市场扫描（约 20 秒）'; }
   refreshHoldings();
   schedule();
   fetchNews();
